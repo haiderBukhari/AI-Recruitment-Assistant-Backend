@@ -100,12 +100,11 @@ def create_job():
     if error_response:
         return error_response, status_code
     data = request.get_json()
-    job_id = data.get('id')
     title = data.get('title')
     description = data.get('description')
     skill_condition = data.get('skill_condition')
 
-    if not all([job_id, title, description]):
+    if not all([title, description]):
         return jsonify({'error': 'Missing required fields'}), 400
 
     if skill_condition is not None:
@@ -114,7 +113,6 @@ def create_job():
         skill_condition_str = None
 
     job_data = {
-        'id': job_id,
         'title': title,
         'description': description,
         'skill_condition': skill_condition_str,
