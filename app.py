@@ -88,5 +88,9 @@ def evaluate():
     result = run_full_evaluation(job_title, job_description, skill_condition, company_info, cv, cover_letter)
     return jsonify(result)
 
+@app_flask.route('/')
+def root():
+    return jsonify({'status': 'ok', 'message': 'AI Recruitment API is running.'})
+
 if __name__ == "__main__":
     app_flask.run(host='0.0.0.0', port=5000)
