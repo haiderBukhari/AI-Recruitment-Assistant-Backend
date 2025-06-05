@@ -144,8 +144,11 @@ def get_company_info():
 
 @app.route('/jobs', methods=['GET'])
 def get_all_jobs():
+    owner_id, error_response, status_code = get_owner_id_from_jwt()
+    if error_response:
+        return error_response, status_code
     try:
-        result = supabase.table('jobs').select('*').execute()
+        result = supabase.table('jobs').select('*').eq('owner_id', owner_id).execute()
         return jsonify({'jobs': result.data}), 200
     except Exception:
         return jsonify({'error': 'Failed to fetch jobs'}), 500
