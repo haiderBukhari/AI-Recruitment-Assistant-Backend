@@ -41,14 +41,16 @@ def signup():
         'company_culture': company_culture,
         'password_hash': password_hash
     }
-    # Check if user exists
-    existing = supabase.table('authentication').select('id').eq('email', email).execute()
-    if existing.data:
-        return jsonify({'error': 'Email already registered'}), 409
-    result = supabase.table('authentication').insert(user_data).execute()
-    if not result.data:
+    try:
+        existing = supabase.table('authentication').select('id').eq('email', email).execute()
+        if existing.data:
+            return jsonify({'error': 'Email already registered'}), 409
+        result = supabase.table('authentication').insert(user_data).execute()
+        if not result.data:
+            return jsonify({'error': 'Signup failed'}), 500
+        user_id = result.data[0]['id']
+    except Exception:
         return jsonify({'error': 'Signup failed'}), 500
-    user_id = result.data[0]['id']
 
     token = jwt.encode({
         'id': user_id,
@@ -64,10 +66,11 @@ def login():
     password = data.get('password')
     if not all([email, password]):
         return jsonify({'error': 'Missing email or password'}), 400
-    user = supabase.table('authentication').select('*').eq('email', email).single().execute()
-    if not user.data:
+    try:
+        user = supabase.table('authentication').select('*').eq('email', email).single().execute()
+        user_data = user.data
+    except Exception:
         return jsonify({'error': 'Invalid credentials'}), 401
-    user_data = user.data
     if not bcrypt.checkpw(password.encode('utf-8'), user_data['password_hash'].encode('utf-8')):
         return jsonify({'error': 'Invalid credentials'}), 401
 
