@@ -108,11 +108,16 @@ def create_job():
     if not all([job_id, title, description]):
         return jsonify({'error': 'Missing required fields'}), 400
 
+    if skill_condition is not None:
+        skill_condition_str = str(skill_condition)
+    else:
+        skill_condition_str = None
+
     job_data = {
         'id': job_id,
         'title': title,
         'description': description,
-        'skill_condition': skill_condition,
+        'skill_condition': skill_condition_str,
         'owner_id': owner_id
     }
     try:
@@ -122,6 +127,22 @@ def create_job():
         return jsonify({'job': result.data[0]}), 201
     except Exception:
         return jsonify({'error': 'Job creation failed'}), 500
+
+@app.route('/company-info', methods=['GET'])
+def get_company_info():
+    owner_id, error_response, status_code = get_owner_id_from_jwt()
+    if error_response:
+        return error_response, status_code
+    try:
+        user = supabase.table('authentication').select('company_details', 'company_culture').eq('id', owner_id).single().execute()
+        if not user.data:
+            return jsonify({'error': 'Company info not found'}), 404
+        return jsonify({
+            'company_details': user.data.get('company_details'),
+            'company_culture': user.data.get('company_culture')
+        })
+    except Exception:
+        return jsonify({'error': 'Failed to fetch company info'}), 500
 
 @app.route('/')
 def root():
