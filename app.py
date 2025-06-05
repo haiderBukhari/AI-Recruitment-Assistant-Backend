@@ -8,6 +8,7 @@ from supabase import create_client, Client
 import bcrypt
 import jwt
 import datetime
+from middleware import get_owner_id_from_jwt
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -92,6 +93,35 @@ def evaluate():
     cover_letter = data.get('cover_letter', '')
     result = run_full_evaluation(job_title, job_description, skill_condition, company_info, cv, cover_letter)
     return jsonify(result)
+
+@app.route('/jobs', methods=['POST'])
+def create_job():
+    owner_id, error_response, status_code = get_owner_id_from_jwt()
+    if error_response:
+        return error_response, status_code
+    data = request.get_json()
+    job_id = data.get('id')
+    title = data.get('title')
+    description = data.get('description')
+    skill_condition = data.get('skill_condition')
+
+    if not all([job_id, title, description]):
+        return jsonify({'error': 'Missing required fields'}), 400
+
+    job_data = {
+        'id': job_id,
+        'title': title,
+        'description': description,
+        'skill_condition': skill_condition,
+        'owner_id': owner_id
+    }
+    try:
+        result = supabase.table('jobs').insert(job_data).execute()
+        if not result.data:
+            return jsonify({'error': 'Job creation failed'}), 500
+        return jsonify({'job': result.data[0]}), 201
+    except Exception:
+        return jsonify({'error': 'Job creation failed'}), 500
 
 @app.route('/')
 def root():
