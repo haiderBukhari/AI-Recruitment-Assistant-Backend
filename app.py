@@ -14,9 +14,9 @@ JWT_SECRET = os.environ.get("JWT_SECRET")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-app_flask = Flask(__name__)
+app = Flask(__name__)
 
-@app_flask.route('/signup', methods=['POST'])
+@app.route('/signup', methods=['POST'])
 def signup():
     data = request.get_json()
     full_name = data.get('full_name')
@@ -55,7 +55,7 @@ def signup():
     }, JWT_SECRET, algorithm='HS256')
     return jsonify({'token': token, 'id': user_id})
 
-@app_flask.route('/login', methods=['POST'])
+@app.route('/login', methods=['POST'])
 def login():
     data = request.get_json()
     email = data.get('email')
@@ -76,7 +76,7 @@ def login():
     }, JWT_SECRET, algorithm='HS256')
     return jsonify({'token': token, 'id': user_data['id']})
 
-@app_flask.route('/evaluate', methods=['POST'])
+@app.route('/evaluate', methods=['POST'])
 def evaluate():
     data = request.get_json()
     job_title = data.get('job_title', '')
@@ -88,9 +88,9 @@ def evaluate():
     result = run_full_evaluation(job_title, job_description, skill_condition, company_info, cv, cover_letter)
     return jsonify(result)
 
-@app_flask.route('/')
+@app.route('/')
 def root():
     return jsonify({'status': 'ok', 'message': 'AI Recruitment API is running.'})
 
 if __name__ == "__main__":
-    app_flask.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5000)
