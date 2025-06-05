@@ -172,12 +172,39 @@ def toggle_job_status(job_id):
 @app.route('/jobs/<job_id>', methods=['GET'])
 def get_job_detail(job_id):
     try:
-        job = supabase.table('jobs').select('title', 'description').eq('id', job_id).single().execute()
+        job = supabase.table('jobs').select('title', 'description', 'status').eq('id', job_id).single().execute()
         if not job.data:
             return jsonify({'error': 'Job not found'}), 404
-        return jsonify({'title': job.data['title'], 'description': job.data['description']}), 200
+        return jsonify({'title': job.data['title'], 'description': job.data['description'], 'status': job.data['status']}), 200
     except Exception:
         return jsonify({'error': 'Failed to fetch job detail'}), 500
+
+@app.route('/resumes', methods=['POST'])
+def submit_resume():
+    data = request.get_json()
+    applicant_name = data.get('applicant_name')
+    email = data.get('email')
+    cv_link = data.get('cv_link')
+    coverletter_link = data.get('coverletter_link')
+    job_id = data.get('job_id')
+
+    if not all([applicant_name, email, cv_link, coverletter_link, job_id]):
+        return jsonify({'error': 'Missing required fields'}), 400
+
+    resume_data = {
+        'applicant_name': applicant_name,
+        'email': email,
+        'cv_link': cv_link,
+        'coverletter_link': coverletter_link,
+        'job_id': job_id
+    }
+    try:
+        result = supabase.table('resumes').insert(resume_data).execute()
+        if not result.data:
+            return jsonify({'error': 'Resume submission failed'}), 500
+        return jsonify({'resume': result.data[0]}), 201
+    except Exception:
+        return jsonify({'error': 'Resume submission failed'}), 500
 
 @app.route('/')
 def root():
