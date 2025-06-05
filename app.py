@@ -2,6 +2,7 @@ import os
 from dotenv import load_dotenv
 load_dotenv()
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from evaluator import run_full_evaluation
 from supabase import create_client, Client
 import bcrypt
@@ -15,6 +16,7 @@ JWT_SECRET = os.environ.get("JWT_SECRET")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = Flask(__name__)
+CORS(app) 
 
 @app.route('/signup', methods=['POST'])
 def signup():
