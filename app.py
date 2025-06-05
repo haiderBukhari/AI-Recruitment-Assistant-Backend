@@ -142,6 +142,40 @@ def get_company_info():
     except Exception:
         return jsonify({'error': 'Failed to fetch company info'}), 500
 
+@app.route('/jobs', methods=['GET'])
+def get_all_jobs():
+    try:
+        result = supabase.table('jobs').select('*').execute()
+        return jsonify({'jobs': result.data}), 200
+    except Exception:
+        return jsonify({'error': 'Failed to fetch jobs'}), 500
+
+@app.route('/jobs/<job_id>/toggle-status', methods=['PUT'])
+def toggle_job_status(job_id):
+    try:
+        job = supabase.table('jobs').select('status').eq('id', job_id).single().execute()
+        if not job.data or 'status' not in job.data:
+            return jsonify({'error': 'Job not found'}), 404
+        current_status = job.data['status']
+        new_status = 'inactive' if current_status == 'active' else 'active'
+        # Update status
+        updated = supabase.table('jobs').update({'status': new_status}).eq('id', job_id).execute()
+        if not updated.data:
+            return jsonify({'error': 'Failed to update job status'}), 500
+        return jsonify({'id': job_id, 'status': new_status}), 200
+    except Exception:
+        return jsonify({'error': 'Failed to update job status'}), 500
+
+@app.route('/jobs/<job_id>', methods=['GET'])
+def get_job_detail(job_id):
+    try:
+        job = supabase.table('jobs').select('title', 'description').eq('id', job_id).single().execute()
+        if not job.data:
+            return jsonify({'error': 'Job not found'}), 404
+        return jsonify({'title': job.data['title'], 'description': job.data['description']}), 200
+    except Exception:
+        return jsonify({'error': 'Failed to fetch job detail'}), 500
+
 @app.route('/')
 def root():
     return jsonify({'status': 'ok', 'message': 'AI Recruitment API is running.'})
