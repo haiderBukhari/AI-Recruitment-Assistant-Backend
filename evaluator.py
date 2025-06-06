@@ -1,5 +1,6 @@
 import os
 import re
+import json
 from typing_extensions import TypedDict
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -113,15 +114,18 @@ def score_skill_match(state: State) -> State:
 
         Respond with:
         Score: <0–100>
-        Reason: <why the skills match or don't you can use bullet points to make it more concise>
+        Reason: <Return a JSON object with the following structure: {"skills": ["matched skill 1", ...], "pending_skills": ["missing skill 1", ...], "summary": "short summary of skill match"}>
         """
     )
     response = (prompt | llm).invoke(state).content.strip()
     score, reason, _, _ = extract_score_reason_level_facts(response)
-    reason = reason.replace('\n', ' ').replace('  ', ' ').strip()
+    try:
+        skill_reason = json.loads(reason)
+    except Exception:
+        skill_reason = {"skills": [], "pending_skills": [], "summary": reason}
     return {
         "skill_score": score,
-        "skill_reason": reason
+        "skill_reason": skill_reason
     }
 
 def score_culture_fit(state: State) -> State:

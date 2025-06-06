@@ -290,13 +290,14 @@ def submit_resume():
         result = result.data[0]
         if not result:
             return jsonify({'error': 'Resume submission failed'}), 500
-        # Increment total_applicants in jobs table
+
         supabase.table('jobs').update({'total_applicants': total_applicants + 1}).eq('id', job_id).execute()
         QSTASH_ENDPOINT = "https://qstash.upstash.io/v2/publish/https://talo-recruitment.vercel.app/evaluate"
         headers = {
             "Authorization": f"Bearer {QSTASH_TOKEN}",
             "Content-Type": "application/json"
         }
+        
         payload = {
             "resume_id": result['id'],
             "job_title": job_title,
