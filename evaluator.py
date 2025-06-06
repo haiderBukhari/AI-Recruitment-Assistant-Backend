@@ -90,42 +90,44 @@ def score_experience(state: State) -> State:
     }
 
 def score_skill_match(state: State) -> State:
-    skill_condition = state.get("skill_condition", "").strip()
-    instruction = f"Based on the following skill conditions strictly specified by HR:\n{skill_condition}" if skill_condition else "Based solely on the job description below:"
 
     prompt = ChatPromptTemplate.from_template(
-        f"""{instruction}
-
-        Evaluate the candidate's skill match by reviewing their CV. Consider the following:
-        - Identify relevant technical and soft skills listed in the CV that match the job requirements.
-        - Check for certifications, formal training, or education that support the required skills.
-        - Review specific projects or achievements that demonstrate the candidate's proficiency in the required skills.
-        - Assess the depth and recency of skill usage to ensure current capability.
-        - Look for evidence of continuous learning, upskilling, or professional development in relevant areas.
-
+        """
+        Based on the following skill conditions strictly specified by HR:\n{skill_condition}" if skill_condition else "Based solely on the job description below
+        
         Job Description:
-        {{job_description}}
+        {job_description}
+
+        Evaluate the candidate's skill match by reviewing their CV and cover letter. Consider the following:
+        - Relevant technical and soft skills listed in the CV (can be related, not necessarily exact keyword match).
+        - Certifications, formal training, or education that support the job requirements.
+        - Relevant projects or achievements demonstrating proficiency.
+        - Recency and depth of skill usage.
+        - Signs of continuous learning or professional development.
 
         Candidate CV:
-        {{cv}}
+        {cv}
 
-        Cover Letter:
-        {{cover_letter}}
+        Cover Letter (if any):
+        {cover_letter}
 
         Respond with:
         Score: <0–100>
-        Reason: <Return a JSON object with the following structure: {"skills": ["matched skill 1", ...], "pending_skills": ["missing skill 1", ...], "summary": "short summary of skill match"}>
+        Reason: <Briefly explain the skill match including:
+        - Which relevant skills are present in the CV.
+        - Which required skills are missing or weak.
+        - Summary of overall readiness and gaps.>
         """
+
     )
+
     response = (prompt | llm).invoke(state).content.strip()
-    score, reason, _, _ = extract_score_reason_level_facts(response)
-    try:
-        skill_reason = json.loads(reason)
-    except Exception:
-        skill_reason = {"skills": [], "pending_skills": [], "summary": reason}
+
+    score, reason, *_ = extract_score_reason_level_facts(response)
+
     return {
         "skill_score": score,
-        "skill_reason": skill_reason
+        "skill_reason": reason
     }
 
 def score_culture_fit(state: State) -> State:
@@ -138,7 +140,6 @@ def score_culture_fit(state: State) -> State:
 
         here is the company culture:
         {company_culture}
-
 
         here is the job description:
         {job_description}
