@@ -327,5 +327,40 @@ def get_resumes_for_job(job_id):
 def root():
     return jsonify({'status': 'ok', 'message': 'AI Recruitment API is running.'})
 
+@app.route('/company', methods=['GET'])
+def get_current_company():
+    owner_id, error_response, status_code = get_owner_id_from_jwt()
+    if error_response:
+        return error_response, status_code
+    try:
+        user = supabase.table('authentication').select('id', 'full_name', 'email', 'company_name', 'company_details', 'company_culture').eq('id', owner_id).single().execute()
+        if not user.data:
+            return jsonify({'error': 'Company not found'}), 404
+        return jsonify(user.data), 200
+    except Exception as e:
+        print(e)
+        return jsonify({'error': 'Failed to fetch company details'}), 500
+
+@app.route('/company', methods=['PUT'])
+def update_current_company():
+    owner_id, error_response, status_code = get_owner_id_from_jwt()
+    if error_response:
+        return error_response, status_code
+    data = request.get_json()
+    update_fields = {}
+    for field in ['full_name', 'company_name', 'company_details', 'company_culture']:
+        if field in data:
+            update_fields[field] = data[field]
+    if not update_fields:
+        return jsonify({'error': 'No fields to update'}), 400
+    try:
+        result = supabase.table('authentication').update(update_fields).eq('id', owner_id).execute()
+        if not result.data:
+            return jsonify({'error': 'Update failed'}), 500
+        return jsonify({'message': 'Company details updated', 'company': result.data[0]}), 200
+    except Exception as e:
+        print(e)
+        return jsonify({'error': 'Failed to update company details'}), 500
+
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
