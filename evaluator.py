@@ -17,6 +17,7 @@ class State(TypedDict):
     job_description: str
     skill_condition: str
     company_info: str
+    company_culture: str
     cv: str
     cover_letter: str
     experience_score: int
@@ -55,6 +56,7 @@ def score_experience(state: State) -> State:
         - Evidence of progression and growth in previous positions.
         - Notable achievements or contributions in past roles.
         - Industry or domain expertise related to the position.
+        - In Experience Facts, you can use bullet points to make it more concise and each bullet point should be a single fact not very long.
         Here is the job description:
         {job_description}
 
@@ -111,7 +113,7 @@ def score_skill_match(state: State) -> State:
 
         Respond with:
         Score: <0–100>
-        Reason: <why the skills match or don't>
+        Reason: <why the skills match or don't you can use bullet points to make it more concise>
         """
     )
     response = (prompt | llm).invoke(state).content.strip()
@@ -126,18 +128,26 @@ def score_culture_fit(state: State) -> State:
     prompt = ChatPromptTemplate.from_template(
         """
         Evaluate the candidate's cultural fit by considering the company's working style, values, and beliefs. Review the candidate's professional background, approach to collaboration, and personal values to assess alignment with the company culture. Candidates who demonstrate strong teamwork and effective collaboration are likely to be a good cultural fit, while those who consistently prefer working independently may not align as well.
+        
         here is the company info:
         {company_info}
+
+        here is the company culture:
+        {company_culture}
+
 
         here is the job description:
         {job_description}
 
-        Candidate Cover Letter:
+        here is the CV:
+        {cv}
+
+        Candidate Cover Letter (optional if not present judge on CV):
         {cover_letter}
 
         Respond with:
         Score: <0–100>
-        Reason: <why the candidate fits or doesn't>
+        Reason: <Concise, 3-4 lines summary focusing only on the most relevant points for company fit>
         """
     )
     response = (prompt | llm).invoke(state).content.strip()
@@ -153,22 +163,25 @@ def score_company_fit(state: State) -> State:
         - Check for industry alignment by noting experience in similar industries or organizations with comparable missions.
         - Evaluate extracurricular involvement, such as volunteer work or professional memberships, that reflects the company's values or community engagement.
         - Look for consistency in the candidate's career choices and stated objectives with the company's vision and values.
-        
+
         here is the company info:
         {company_info}
 
-        Job Description:
+        here is the company culture:
+        {company_culture}
+
+        here is the job description:
         {job_description}
 
-        CV:
+        here is the CV:
         {cv}
 
-        Cover Letter:
+        Candidate Cover Letter (optional if not present judge on CV):
         {cover_letter}
-
+        
         Respond with:
         Score: <0–100>
-        Reason: <why>
+        Reason: <Concise, 3-4 lines summary focusing only on the most relevant points for company fit>
         """
     )
     response = (prompt | llm).invoke(state).content.strip()
@@ -211,13 +224,14 @@ workflow.add_edge("final_decision", END)
 
 app = workflow.compile()
 
-def run_full_evaluation(job_title, job_description, skill_condition, company_info, cv, cover_letter=""):
+def run_full_evaluation(job_title, job_description, skill_condition, company_info, cv, cover_letter="", company_culture=""):
     input_state = {
         "job_title": job_title,
         "job_description": job_description,
         "skill_condition": skill_condition,
         "company_info": company_info,
         "cv": cv,
-        "cover_letter": cover_letter
+        "cover_letter": cover_letter,
+        "company_culture": company_culture
     }
     return app.invoke(input_state) 

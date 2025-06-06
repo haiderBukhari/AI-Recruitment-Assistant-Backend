@@ -9,6 +9,11 @@ import bcrypt
 import jwt
 import datetime
 from middleware import get_owner_id_from_jwt
+from google import genai
+from google.genai import types
+import io
+import httpx
+from verify_qstash import verify_qstash_signature
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -18,6 +23,23 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 app = Flask(__name__)
 CORS(app) 
+
+QSTASH_TOKEN = os.getenv("QSTASH_TOKEN")
+QSTASH_ENDPOINT = "https://qstash.upstash.io/v1/publish"
+
+
+def extract_text_from_pdf_url(pdf_url, prompt="Extract all text from this document exact same as it is in the document"):
+    client = genai.Client()
+    doc_io = io.BytesIO(httpx.get(pdf_url).content)
+    sample_doc = client.files.upload(
+        file=doc_io,
+        config=dict(mime_type='application/pdf')
+    )
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=[sample_doc, prompt]
+    )
+    return response.text
 
 @app.route('/signup', methods=['POST'])
 def signup():
@@ -84,14 +106,58 @@ def login():
 
 @app.route('/evaluate', methods=['POST'])
 def evaluate():
+    
+    verify_qstash_signature(request)
+    
     data = request.get_json()
+    resume_id = data.get('resume_id', '')
     job_title = data.get('job_title', '')
     job_description = data.get('job_description', '')
     skill_condition = data.get('skill_condition', '')
     company_info = data.get('company_info', '')
+    company_culture = data.get('company_culture', '')
     cv = data.get('cv', '')
     cover_letter = data.get('cover_letter', '')
-    result = run_full_evaluation(job_title, job_description, skill_condition, company_info, cv, cover_letter)
+
+    if cv and isinstance(cv, str) and cv.startswith('http'):
+        try:
+            cv = extract_text_from_pdf_url(cv)
+        except Exception:
+            cv = "Not present"
+    elif not cv:
+        cv = "Not present"
+
+    if cover_letter and isinstance(cover_letter, str) and cover_letter.startswith('http'):
+        try:
+            cover_letter = extract_text_from_pdf_url(cover_letter)
+        except Exception:
+            cover_letter = "Not present"
+    elif not cover_letter:
+        cover_letter = "Not present"
+
+    result = run_full_evaluation(job_title, job_description, skill_condition, company_info, cv, cover_letter, company_culture)
+
+    if resume_id:
+        update_data = {
+            'company_fit_reason': result.get('company_fit_reason'),
+            'company_fit_score': result.get('company_fit_score'),
+            'culture_reason': result.get('culture_reason'),
+            'culture_score': result.get('culture_score'),
+            'experience_facts': result.get('experience_facts'),
+            'experience_reason': result.get('experience_reason'),
+            'experience_score': result.get('experience_score'),
+            'final_recommendation': result.get('final_recommendation'),
+            'level_suggestion': result.get('level_suggestion'),
+            'skill_reason': result.get('skill_reason'),
+            'skill_score': result.get('skill_score'),
+            'total_weighted_score': result.get('total_weighted_score'),
+            'evaluated': True
+        }
+        try:
+            supabase.table('resumes').update(update_data).eq('id', resume_id).execute()
+        except Exception as e:
+            print(f"Failed to update resume evaluation: {e}")
+
     return jsonify(result)
 
 @app.route('/jobs', methods=['POST'])
@@ -191,6 +257,23 @@ def submit_resume():
     if not all([applicant_name, email, cv_link, job_id]):
         return jsonify({'error': 'Missing required fields'}), 400
 
+    job = supabase.table('jobs').select('title', 'description', 'skill_condition', 'owner_id').eq('id', job_id).single().execute()
+
+    if not job.data:
+        return jsonify({'error': 'Job not found'}), 404
+
+    job_title = job.data['title']
+    job_description = job.data['description']
+    skill_condition = job.data['skill_condition']
+
+    auth_data = supabase.table('authentication').select('company_details', 'company_culture').eq('id', job.data['owner_id']).single().execute()
+
+    if not auth_data.data:
+        return jsonify({'error': 'Company info not found'}), 404
+
+    company_info = auth_data.data['company_details']
+    company_culture = auth_data.data['company_culture'] 
+
     resume_data = {
         'applicant_name': applicant_name,
         'email': email,
@@ -198,12 +281,39 @@ def submit_resume():
         'coverletter_link': coverletter_link,
         'job_id': job_id
     }
+
     try:
         result = supabase.table('resumes').insert(resume_data).execute()
-        if not result.data:
+
+        result = result.data[0]
+
+        if not result:
             return jsonify({'error': 'Resume submission failed'}), 500
-        return jsonify({'resume': result.data[0]}), 201
-    except Exception:
+        
+        url_to_call = "https://talo-recruitment.vercel.app/evaluate"
+
+        headers = {
+            "Authorization": f"Bearer {QSTASH_TOKEN}",
+            "Content-Type": "application/json"
+        }
+
+        response = requests.post(QSTASH_ENDPOINT, headers=headers, json={
+            "url": url_to_call,
+            "body": {
+                "resume_id": result['id'],
+                "job_title": job_title,
+                "job_description": job_description,
+                "skill_condition": skill_condition,
+                "company_info": company_info,
+                "company_culture": company_culture,
+                "cv": cv_link,
+                "cover_letter": coverletter_link
+            }
+        })
+
+        return jsonify({'resume': result}), 201
+    except Exception as e:
+        print(e)
         return jsonify({'error': 'Resume submission failed'}), 500
 
 @app.route('/')
