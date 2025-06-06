@@ -188,7 +188,7 @@ def submit_resume():
     coverletter_link = data.get('coverletter_link')
     job_id = data.get('job_id')
 
-    if not all([applicant_name, email, cv_link, coverletter_link, job_id]):
+    if not all([applicant_name, email, cv_link, job_id]):
         return jsonify({'error': 'Missing required fields'}), 400
 
     resume_data = {
