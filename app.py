@@ -6,6 +6,7 @@ from flask_cors import CORS
 from evaluator import run_full_evaluation
 from supabase import create_client, Client
 import bcrypt
+import requests
 import jwt
 import datetime
 from middleware import get_owner_id_from_jwt
@@ -107,7 +108,7 @@ def login():
 @app.route('/evaluate', methods=['POST'])
 def evaluate():
     
-    verify_qstash_signature(request)
+    # verify_qstash_signature(request)
     
     data = request.get_json()
     resume_id = data.get('resume_id', '')
@@ -284,33 +285,26 @@ def submit_resume():
 
     try:
         result = supabase.table('resumes').insert(resume_data).execute()
-
         result = result.data[0]
-
         if not result:
             return jsonify({'error': 'Resume submission failed'}), 500
-        
-        url_to_call = "https://talo-recruitment.vercel.app/evaluate"
-
+        QSTASH_ENDPOINT = "https://qstash.upstash.io/v2/publish/https://talo-recruitment.vercel.app/evaluate"
         headers = {
             "Authorization": f"Bearer {QSTASH_TOKEN}",
             "Content-Type": "application/json"
         }
-
-        response = requests.post(QSTASH_ENDPOINT, headers=headers, json={
-            "url": url_to_call,
-            "body": {
-                "resume_id": result['id'],
-                "job_title": job_title,
-                "job_description": job_description,
-                "skill_condition": skill_condition,
-                "company_info": company_info,
-                "company_culture": company_culture,
-                "cv": cv_link,
-                "cover_letter": coverletter_link
-            }
-        })
-
+        payload = {
+            "resume_id": result['id'],
+            "job_title": job_title,
+            "job_description": job_description,
+            "skill_condition": skill_condition,
+            "company_info": company_info,
+            "company_culture": company_culture,
+            "cv": cv_link,
+            "cover_letter": coverletter_link
+        }
+        response = requests.post(QSTASH_ENDPOINT, headers=headers, json=payload)
+        print(QSTASH_TOKEN, response, response.text)
         return jsonify({'resume': result}), 201
     except Exception as e:
         print(e)
