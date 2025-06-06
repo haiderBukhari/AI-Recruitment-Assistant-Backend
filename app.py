@@ -65,6 +65,7 @@ def signup():
         'company_culture': company_culture,
         'password_hash': password_hash
     }
+    
     try:
         existing = supabase.table('authentication').select('id').eq('email', email).execute()
         if existing.data:
@@ -258,7 +259,7 @@ def submit_resume():
     if not all([applicant_name, email, cv_link, job_id]):
         return jsonify({'error': 'Missing required fields'}), 400
 
-    job = supabase.table('jobs').select('title', 'description', 'skill_condition', 'owner_id').eq('id', job_id).single().execute()
+    job = supabase.table('jobs').select('title', 'description', 'skill_condition', 'owner_id', 'total_applicants').eq('id', job_id).single().execute()
 
     if not job.data:
         return jsonify({'error': 'Job not found'}), 404
@@ -266,6 +267,7 @@ def submit_resume():
     job_title = job.data['title']
     job_description = job.data['description']
     skill_condition = job.data['skill_condition']
+    total_applicants = job.data.get('total_applicants', 0)
 
     auth_data = supabase.table('authentication').select('company_details', 'company_culture').eq('id', job.data['owner_id']).single().execute()
 
@@ -288,6 +290,8 @@ def submit_resume():
         result = result.data[0]
         if not result:
             return jsonify({'error': 'Resume submission failed'}), 500
+        # Increment total_applicants in jobs table
+        supabase.table('jobs').update({'total_applicants': total_applicants + 1}).eq('id', job_id).execute()
         QSTASH_ENDPOINT = "https://qstash.upstash.io/v2/publish/https://talo-recruitment.vercel.app/evaluate"
         headers = {
             "Authorization": f"Bearer {QSTASH_TOKEN}",
@@ -309,6 +313,15 @@ def submit_resume():
     except Exception as e:
         print(e)
         return jsonify({'error': 'Resume submission failed'}), 500
+
+@app.route('/resumes/<job_id>', methods=['GET'])
+def get_resumes_for_job(job_id):
+    try:
+        result = supabase.table('resumes').select('*').eq('job_id', job_id).execute()
+        return jsonify({'resumes': result.data}), 200
+    except Exception as e:
+        print(e)
+        return jsonify({'error': 'Failed to fetch resumes'}), 500
 
 @app.route('/')
 def root():
