@@ -247,12 +247,20 @@ def get_company_info():
     if error_response:
         return error_response, status_code
     try:
-        user = supabase.table('authentication').select('company_details', 'company_culture').eq('id', owner_id).single().execute()
+        user = supabase.table('authentication').select('company_details', 'company_culture', 'company_name', 'website_url', 'company_values', 'linkedin', 'facebook', 'twitter', 'instagram', 'company_description').eq('id', owner_id).single().execute()
         if not user.data:
             return jsonify({'error': 'Company info not found'}), 404
         return jsonify({
+            'company_name': user.data.get('company_name'),
+            'website_url': user.data.get('website_url'),
+            'company_description': user.data.get('company_description'),
             'company_details': user.data.get('company_details'),
-            'company_culture': user.data.get('company_culture')
+            'company_culture': user.data.get('company_culture'),
+            'company_values': user.data.get('company_values'),
+            'linkedin': user.data.get('linkedin'),
+            'facebook': user.data.get('facebook'),
+            'twitter': user.data.get('twitter'),
+            'instagram': user.data.get('instagram'),
         })
     except Exception:
         return jsonify({'error': 'Failed to fetch company info'}), 500
