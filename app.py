@@ -420,5 +420,38 @@ def update_current_company():
         print(e)
         return jsonify({'error': 'Failed to update company details'}), 500
 
+@app.route('/company-info', methods=['PUT'])
+def update_company_info():
+    owner_id, error_response, status_code = get_owner_id_from_jwt()
+    if error_response:
+        return error_response, status_code
+    
+    data = request.get_json()
+    
+    update_data = {}
+    allowed_fields = [
+        'company_description', 'company_details', 
+        'company_culture', 'company_values', 'linkedin', 'facebook', 'twitter', 'instagram'
+    ]
+    
+    for field in allowed_fields:
+        if field in data:
+            update_data[field] = data[field]
+            
+    if not update_data:
+        return jsonify({'error': 'No fields to update'}), 400
+
+    try:
+        result = supabase.table('authentication').update(update_data).eq('id', owner_id).execute()
+        
+        if not result.data:
+            return jsonify({'error': 'Failed to update company info'}), 500
+            
+        return jsonify({'message': 'Company info updated successfully', 'data': result.data[0]}), 200
+        
+    except Exception as e:
+        print(f"Error updating company info: {e}")
+        return jsonify({'error': 'Failed to update company info'}), 500
+
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
