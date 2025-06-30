@@ -10,8 +10,6 @@ import logging
 from dotenv import load_dotenv
 load_dotenv()
 
-logging.basicConfig(level=logging.DEBUG)
-
 os.environ["GOOGLE_API_KEY"] = "AIzaSyBL6YSdMIc3FNAjSojv3Sn4ehcJonxnSik"
 
 llm = ChatGoogleGenerativeAI(

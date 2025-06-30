@@ -66,8 +66,15 @@ def signup():
     }
     try:
         existing = supabase.table('authentication').select('id').eq('email', email).execute()
+
+        print(existing)
         if existing.data:
             return jsonify({'error': 'Email already registered'}), 409
+
+        result = supabase.table('authentication').insert(user_data).execute()
+        if not result.data:
+            return jsonify({'error': 'Signup failed'}), 500
+        user_id = result.data[0]['id']
 
         QSTASH_ENDPOINT = "https://qstash.upstash.io/v2/publish/https://talo-recruitment.vercel.app/fetch-company"
         headers = {
@@ -76,16 +83,11 @@ def signup():
         }
         
         payload = {
-            "resume_id": existing.data[0]['id'],
+            "company_id": result.data[0]['id'],
             "website_url": website_url,
         }
         response = requests.post(QSTASH_ENDPOINT, headers=headers, json=payload)
-        print(QSTASH_TOKEN, response, response.text)
 
-        result = supabase.table('authentication').insert(user_data).execute()
-        if not result.data:
-            return jsonify({'error': 'Signup failed'}), 500
-        user_id = result.data[0]['id']
     except Exception:
         return jsonify({'error': 'Signup failed'}), 500
 
