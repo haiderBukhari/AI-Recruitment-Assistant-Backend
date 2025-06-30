@@ -15,6 +15,7 @@ from google.genai import types
 import io
 import httpx
 from verify_qstash import verify_qstash_signature
+from companyConfigExtractor import run_company_extraction
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -47,12 +48,11 @@ def signup():
     data = request.get_json()
     full_name = data.get('full_name')
     email = data.get('email')
-    company_name = data.get('company_name')
-    company_details = data.get('company_details')
-    company_culture = data.get('company_culture')
     password = data.get('password')
+    company_name = data.get('company_name')
+    website_url = data.get('website_url')
 
-    if not all([full_name, email, company_name, password]):
+    if not all([full_name, email, password, company_name, website_url]):
         return jsonify({'error': 'Missing required fields'}), 400
 
     password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -60,16 +60,28 @@ def signup():
     user_data = {
         'full_name': full_name,
         'email': email,
+        'password_hash': password_hash,
         'company_name': company_name,
-        'company_details': company_details,
-        'company_culture': company_culture,
-        'password_hash': password_hash
+        'website_url': website_url
     }
-    
     try:
         existing = supabase.table('authentication').select('id').eq('email', email).execute()
         if existing.data:
             return jsonify({'error': 'Email already registered'}), 409
+
+        QSTASH_ENDPOINT = "https://qstash.upstash.io/v2/publish/https://talo-recruitment.vercel.app/fetch-company"
+        headers = {
+            "Authorization": f"Bearer {QSTASH_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "resume_id": existing.data[0]['id'],
+            "website_url": website_url,
+        }
+        response = requests.post(QSTASH_ENDPOINT, headers=headers, json=payload)
+        print(QSTASH_TOKEN, response, response.text)
+
         result = supabase.table('authentication').insert(user_data).execute()
         if not result.data:
             return jsonify({'error': 'Signup failed'}), 500
@@ -77,12 +89,7 @@ def signup():
     except Exception:
         return jsonify({'error': 'Signup failed'}), 500
 
-    token = jwt.encode({
-        'id': user_id,
-        'email': email,
-        'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)
-    }, JWT_SECRET, algorithm='HS256')
-    return jsonify({'token': token, 'id': user_id})
+    return jsonify({'id': user_id, 'full_name': full_name, 'email': email, 'company_name': company_name, 'website_url': website_url}), 201
 
 @app.route('/login', methods=['POST'])
 def login():
@@ -105,6 +112,46 @@ def login():
         'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)
     }, JWT_SECRET, algorithm='HS256')
     return jsonify({'token': token, 'id': user_data['id']})
+
+@app.route('/fetch-company', methods=['POST'])
+def fetch_company():
+    data = request.get_json()
+    company_id = data.get('company_id')
+    website_url = data.get('website_url')
+
+    if not all([company_id, website_url]):
+        return jsonify({'error': 'Missing company_id or website_url'}), 400
+
+    try:
+        extracted_data = run_company_extraction(website_url)
+
+        update_data = {
+            'company_description': extracted_data.get('company_description'),
+            'company_details': extracted_data.get('company_details'),
+            'company_culture': extracted_data.get('company_culture'),
+            'company_values': extracted_data.get('company_values'),
+            'linkedin': extracted_data.get('linkedin'),
+            'twitter': extracted_data.get('twitter'),
+            'instagram': extracted_data.get('instagram'),
+            'facebook': extracted_data.get('facebook')
+        }
+
+        # Filter out any keys with None values to avoid DB errors
+        update_data = {k: v for k, v in update_data.items() if v is not None}
+        
+        if not update_data:
+            return jsonify({'error': 'No data extracted to update'}), 400
+
+        result = supabase.table('authentication').update(update_data).eq('id', company_id).execute()
+        
+        if not result.data:
+            return jsonify({'error': 'Failed to update company data in Supabase'}), 500
+
+        return jsonify(extracted_data), 200
+
+    except Exception as e:
+        print(f"Error in /fetch-company: {e}")
+        return jsonify({'error': 'Failed to fetch and update company data'}), 500
 
 @app.route('/evaluate', methods=['POST'])
 def evaluate():
