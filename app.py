@@ -16,6 +16,7 @@ import io
 import httpx
 from verify_qstash import verify_qstash_signature
 from companyConfigExtractor import run_company_extraction
+from flask import abort
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -29,6 +30,15 @@ CORS(app)
 QSTASH_TOKEN = os.getenv("QSTASH_TOKEN")
 QSTASH_ENDPOINT = "https://qstash.upstash.io/v1/publish"
 
+# Mapping from workflow step names to resume table columns
+WORKFLOW_STEP_TO_COLUMN = {
+    'Application Screening': 'is_screening',
+    'Initial Interview': 'is_initial_interview',
+    'Assessment': 'in_assessment',
+    'Secondary Interview': 'is_secondary_interview',
+    'Final Interview': 'in_final_interview',
+    'Offer Stage': 'is_hired',
+}
 
 def extract_text_from_pdf_url(pdf_url, prompt="Extract all text from this document exact same as it is in the document"):
     client = genai.Client()
@@ -539,6 +549,104 @@ def get_or_create_workflow():
         else:
             print(f'Error in GET /workflow: {e}')
             return jsonify({'error': 'Failed to get or create workflow'}), 500
+
+@app.route('/resumes/<resume_id>/next-step', methods=['GET'])
+def get_next_step(resume_id):
+    # Get JWT from Authorization header
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return jsonify({'error': 'Missing or invalid Authorization header'}), 401
+    token = auth_header.split(' ')[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        user_id = payload.get('id')
+        if not user_id:
+            return jsonify({'error': 'Invalid token: no user id'}), 401
+    except Exception:
+        return jsonify({'error': 'Invalid or expired token'}), 401
+
+    # Get workflow for user
+    try:
+        workflow_result = supabase.table('workflow').select('*').eq('user_id', user_id).single().execute()
+        workflow = workflow_result.data['workflow_process']
+    except Exception as e:
+        return jsonify({'error': 'Workflow not found for user'}), 404
+
+    # Get resume
+    try:
+        resume_result = supabase.table('resumes').select('*').eq('id', resume_id).single().execute()
+        resume = resume_result.data
+    except Exception as e:
+        return jsonify({'error': 'Resume not found'}), 404
+
+    # Iterate through workflow steps in order
+    for step_key in sorted(workflow.keys(), key=lambda x: int(x.replace('step', ''))):
+        step_name = workflow[step_key]
+        column = WORKFLOW_STEP_TO_COLUMN.get(step_name)
+        if not column:
+            continue
+        # For the first step, if True, go to next; for others, if False, that's the next step
+        if column == 'is_screening':
+            if resume.get(column, False):
+                continue
+            else:
+                return jsonify({'next_step': step_name}), 200
+        else:
+            if not resume.get(column, False):
+                return jsonify({'next_step': step_name}), 200
+    # If all steps are done
+    return jsonify({'next_step': 'Process Complete'}), 200
+
+@app.route('/resumes/<resume_id>/next-step', methods=['POST'])
+def advance_next_step(resume_id):
+    # Get JWT from Authorization header
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return jsonify({'error': 'Missing or invalid Authorization header'}), 401
+    token = auth_header.split(' ')[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        user_id = payload.get('id')
+        if not user_id:
+            return jsonify({'error': 'Invalid token: no user id'}), 401
+    except Exception:
+        return jsonify({'error': 'Invalid or expired token'}), 401
+
+    # Get workflow for user
+    try:
+        workflow_result = supabase.table('workflow').select('*').eq('user_id', user_id).single().execute()
+        workflow = workflow_result.data['workflow_process']
+    except Exception as e:
+        return jsonify({'error': 'Workflow not found for user'}), 404
+
+    # Get resume
+    try:
+        resume_result = supabase.table('resumes').select('*').eq('id', resume_id).single().execute()
+        resume = resume_result.data
+    except Exception as e:
+        return jsonify({'error': 'Resume not found'}), 404
+
+    # Find the next step
+    for step_key in sorted(workflow.keys(), key=lambda x: int(x.replace('step', ''))):
+        step_name = workflow[step_key]
+        column = WORKFLOW_STEP_TO_COLUMN.get(step_name)
+        if not column:
+            continue
+        if column == 'is_screening':
+            if resume.get(column, False):
+                continue
+            else:
+                # Advance this step
+                update = {column: True}
+                result = supabase.table('resumes').update(update).eq('id', resume_id).execute()
+                return jsonify({'updated_resume': result.data[0], 'current_step': step_name}), 200
+        else:
+            if not resume.get(column, False):
+                update = {column: True}
+                result = supabase.table('resumes').update(update).eq('id', resume_id).execute()
+                return jsonify({'updated_resume': result.data[0], 'current_step': step_name}), 200
+    # If all steps are done
+    return jsonify({'message': 'Process Complete'}), 200
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
