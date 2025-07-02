@@ -289,9 +289,23 @@ def get_all_jobs():
     owner_id, error_response, status_code = get_owner_id_from_jwt()
     if error_response:
         return error_response, status_code
+    # Accept JSON body with 'stage' field
+    data = request.get_json(silent=True) or {}
+    stage = data.get('stage')
+    column = WORKFLOW_STEP_TO_COLUMN.get(stage) if stage else None
     try:
         result = supabase.table('jobs').select('*').eq('owner_id', owner_id).execute()
-        return jsonify({'jobs': result.data}), 200
+        jobs = result.data or []
+        jobs_with_counts = []
+        for job in jobs:
+            job_info = dict(job)
+            if column:
+                resumes_result = supabase.table('resumes').select('id').eq('job_id', job['id']).eq(column, True).execute()
+                count = len(resumes_result.data) if resumes_result.data else 0
+                job_info['resume_count_in_stage'] = count
+                job_info['stage'] = stage
+            jobs_with_counts.append(job_info)
+        return jsonify({'jobs': jobs_with_counts}), 200
     except Exception:
         return jsonify({'error': 'Failed to fetch jobs'}), 500
 
@@ -313,11 +327,22 @@ def toggle_job_status(job_id):
 
 @app.route('/jobs/<job_id>', methods=['GET'])
 def get_job_detail(job_id):
+    # Accept JSON body with 'stage' field
+    from flask import request as flask_request
+    data = flask_request.get_json(silent=True) or {}
+    stage = data.get('stage')
+    column = WORKFLOW_STEP_TO_COLUMN.get(stage) if stage else None
     try:
         job = supabase.table('jobs').select('title', 'description', 'status').eq('id', job_id).single().execute()
         if not job.data:
             return jsonify({'error': 'Job not found'}), 404
-        return jsonify({'title': job.data['title'], 'description': job.data['description'], 'status': job.data['status']}), 200
+        response = {'title': job.data['title'], 'description': job.data['description'], 'status': job.data['status']}
+        if column:
+            resumes_result = supabase.table('resumes').select('id').eq('job_id', job_id).eq(column, True).execute()
+            count = len(resumes_result.data) if resumes_result.data else 0
+            response['resume_count_in_stage'] = count
+            response['stage'] = stage
+        return jsonify(response), 200
     except Exception:
         return jsonify({'error': 'Failed to fetch job detail'}), 500
 
