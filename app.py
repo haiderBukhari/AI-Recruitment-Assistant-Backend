@@ -516,19 +516,29 @@ def get_or_create_workflow():
         if existing.data:
             return jsonify({'workflow': existing.data}), 200
         else:
+            # This block is unlikely to be reached because .single() raises if no row
+            pass
+    except Exception as e:
+        # Check if the error is due to no row found
+        error_message = str(e)
+        if 'PGRST116' in error_message or 'no row' in error_message.lower():
             default_workflow = {
                 'step1': 'Application Screening',
                 'step2': 'Assessment',
                 'step3': 'Final Interview',
                 'step4': 'Offer Stage'
             }
-            result = supabase.table('workflow').insert({'user_id': user_id, 'workflow_process': default_workflow}).execute()
-            if not result.data:
+            try:
+                result = supabase.table('workflow').insert({'user_id': user_id, 'workflow_process': default_workflow}).execute()
+                if not result.data:
+                    return jsonify({'error': 'Failed to create default workflow'}), 500
+                return jsonify({'workflow': result.data[0], 'action': 'created_default'}), 201
+            except Exception as inner_e:
+                print(f'Error creating default workflow: {inner_e}')
                 return jsonify({'error': 'Failed to create default workflow'}), 500
-            return jsonify({'workflow': result.data[0], 'action': 'created_default'}), 201
-    except Exception as e:
-        print(f'Error in GET /workflow: {e}')
-        return jsonify({'error': 'Failed to get or create workflow'}), 500
+        else:
+            print(f'Error in GET /workflow: {e}')
+            return jsonify({'error': 'Failed to get or create workflow'}), 500
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
