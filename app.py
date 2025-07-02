@@ -76,6 +76,13 @@ def signup():
             return jsonify({'error': 'Signup failed'}), 500
         user_id = result.data[0]['id']
 
+        # Generate JWT token after signup
+        token = jwt.encode({
+            'id': user_id,
+            'email': email,
+            'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)
+        }, JWT_SECRET, algorithm='HS256')
+
         QSTASH_ENDPOINT = "https://qstash.upstash.io/v2/publish/https://talo-recruitment.vercel.app/fetch-company"
         headers = {
             "Authorization": f"Bearer {QSTASH_TOKEN}",
@@ -91,7 +98,7 @@ def signup():
     except Exception:
         return jsonify({'error': 'Signup failed'}), 500
 
-    return jsonify({'id': user_id, 'full_name': full_name, 'email': email, 'company_name': company_name, 'website_url': website_url}), 201
+    return jsonify({'id': user_id, 'full_name': full_name, 'email': email, 'company_name': company_name, 'website_url': website_url, 'token': token}), 201
 
 @app.route('/login', methods=['POST'])
 def login():
