@@ -289,18 +289,43 @@ def get_all_jobs():
     owner_id, error_response, status_code = get_owner_id_from_jwt()
     if error_response:
         return error_response, status_code
-    # Accept JSON body with 'stage' field
-    data = request.get_json(silent=True) or {}
-    stage = data.get('stage')
+    # Accept 'stage' as a query parameter
+    stage = request.args.get('stage')
     column = WORKFLOW_STEP_TO_COLUMN.get(stage) if stage else None
     try:
         result = supabase.table('jobs').select('*').eq('owner_id', owner_id).execute()
         jobs = result.data or []
         jobs_with_counts = []
+        # If stage is provided, get workflow for the user
+        workflow = None
+        next_column = None
+        if column:
+            try:
+                workflow_result = supabase.table('workflow').select('workflow_process').eq('user_id', owner_id).single().execute()
+                workflow_dict = workflow_result.data['workflow_process']
+                # Find the order of steps
+                step_keys = sorted(workflow_dict.keys(), key=lambda x: int(x.replace('step', '')))
+                step_names = [workflow_dict[k] for k in step_keys]
+                # Find index of current stage
+                if stage in step_names:
+                    idx = step_names.index(stage)
+                    # Get next stage column if exists
+                    if idx + 1 < len(step_names):
+                        next_stage = step_names[idx + 1]
+                        next_column = WORKFLOW_STEP_TO_COLUMN.get(next_stage)
+            except Exception as e:
+                pass  # If workflow not found, fallback to just current column
         for job in jobs:
             job_info = dict(job)
             if column:
-                resumes_result = supabase.table('resumes').select('id').eq('job_id', job['id']).eq(column, True).execute()
+                resumes_query = supabase.table('resumes').select('id')\
+                    .eq('job_id', job['id'])\
+                    .eq(column, True)
+                if next_column:
+                    resumes_query = resumes_query.eq(next_column, False)
+                resumes_result = resumes_query.execute()
+
+                print(resumes_result)
                 count = len(resumes_result.data) if resumes_result.data else 0
                 job_info['resume_count_in_stage'] = count
                 job_info['stage'] = stage
@@ -327,18 +352,35 @@ def toggle_job_status(job_id):
 
 @app.route('/jobs/<job_id>', methods=['GET'])
 def get_job_detail(job_id):
-    # Accept JSON body with 'stage' field
-    from flask import request as flask_request
-    data = flask_request.get_json(silent=True) or {}
-    stage = data.get('stage')
+    # Accept 'stage' as a query parameter
+    stage = request.args.get('stage')
     column = WORKFLOW_STEP_TO_COLUMN.get(stage) if stage else None
+    next_column = None
     try:
-        job = supabase.table('jobs').select('title', 'description', 'status').eq('id', job_id).single().execute()
+        job = supabase.table('jobs').select('title', 'description', 'status', 'owner_id').eq('id', job_id).single().execute()
         if not job.data:
             return jsonify({'error': 'Job not found'}), 404
         response = {'title': job.data['title'], 'description': job.data['description'], 'status': job.data['status']}
         if column:
-            resumes_result = supabase.table('resumes').select('id').eq('job_id', job_id).eq(column, True).execute()
+            # Try to get workflow for the job's owner
+            try:
+                workflow_result = supabase.table('workflow').select('workflow_process').eq('user_id', job.data['owner_id']).single().execute()
+                workflow_dict = workflow_result.data['workflow_process']
+                step_keys = sorted(workflow_dict.keys(), key=lambda x: int(x.replace('step', '')))
+                step_names = [workflow_dict[k] for k in step_keys]
+                if stage in step_names:
+                    idx = step_names.index(stage)
+                    if idx + 1 < len(step_names):
+                        next_stage = step_names[idx + 1]
+                        next_column = WORKFLOW_STEP_TO_COLUMN.get(next_stage)
+            except Exception:
+                pass
+            resumes_query = supabase.table('resumes').select('id')\
+                .eq('job_id', job_id)\
+                .eq(column, True)
+            if next_column:
+                resumes_query = resumes_query.eq(next_column, False)
+            resumes_result = resumes_query.execute()
             count = len(resumes_result.data) if resumes_result.data else 0
             response['resume_count_in_stage'] = count
             response['stage'] = stage
@@ -416,9 +458,36 @@ def submit_resume():
 
 @app.route('/resumes/<job_id>', methods=['GET'])
 def get_resumes_for_job(job_id):
+    # Accept 'stage' as a query parameter
+    stage = request.args.get('stage')
+    column = WORKFLOW_STEP_TO_COLUMN.get(stage) if stage else None
+    next_column = None
     try:
-        result = supabase.table('resumes').select('*').eq('job_id', job_id).execute()
-        return jsonify({'resumes': result.data}), 200
+        if column:
+            # Get the job to find owner_id for workflow
+            job = supabase.table('jobs').select('owner_id').eq('id', job_id).single().execute()
+            owner_id = job.data['owner_id'] if job and job.data else None
+            if owner_id:
+                try:
+                    workflow_result = supabase.table('workflow').select('workflow_process').eq('user_id', owner_id).single().execute()
+                    workflow_dict = workflow_result.data['workflow_process']
+                    step_keys = sorted(workflow_dict.keys(), key=lambda x: int(x.replace('step', '')))
+                    step_names = [workflow_dict[k] for k in step_keys]
+                    if stage in step_names:
+                        idx = step_names.index(stage)
+                        if idx + 1 < len(step_names):
+                            next_stage = step_names[idx + 1]
+                            next_column = WORKFLOW_STEP_TO_COLUMN.get(next_stage)
+                except Exception:
+                    pass
+            resumes_query = supabase.table('resumes').select('*').eq('job_id', job_id).eq(column, True)
+            if next_column:
+                resumes_query = resumes_query.eq(next_column, False)
+            result = resumes_query.execute()
+            return jsonify({'resumes': result.data}), 200
+        else:
+            result = supabase.table('resumes').select('*').eq('job_id', job_id).execute()
+            return jsonify({'resumes': result.data}), 200
     except Exception as e:
         print(e)
         return jsonify({'error': 'Failed to fetch resumes'}), 500
