@@ -8,7 +8,6 @@ from supabase import create_client, Client
 import bcrypt
 import requests
 import jwt
-import datetime
 from middleware import get_owner_id_from_jwt
 from google import genai
 from google.genai import types
@@ -17,6 +16,9 @@ import httpx
 from verify_qstash import verify_qstash_signature
 from companyConfigExtractor import run_company_extraction
 from flask import abort
+from interviewGenerationAgent import generate_interview_questions
+from interviewevaluator import evaluate_interview_performance
+from datetime import datetime
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -741,6 +743,268 @@ def advance_next_step(resume_id):
                 return jsonify({'updated_resume': result.data[0], 'current_step': step_name}), 200
     # If all steps are done
     return jsonify({'message': 'Process Complete'}), 200
+
+@app.route('/interview/generate', methods=['POST'])
+def generate_interview():
+    data = request.get_json()
+    resume_id = data.get('resume_id')
+    stage = data.get('stage')
+    if not resume_id or not stage:
+        return jsonify({'error': 'Missing resume_id or stage'}), 400
+    # Fetch resume and job info
+    try:
+        resume = supabase.table('resumes').select('*').eq('id', resume_id).single().execute().data
+        if not resume:
+            return jsonify({'error': 'Resume not found'}), 404
+        job = supabase.table('jobs').select('*').eq('id', resume['job_id']).single().execute().data
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+        auth = supabase.table('authentication').select('company_details', 'company_culture').eq('id', job['owner_id']).single().execute().data
+        company_info = auth.get('company_details', '') if auth else ''
+        company_culture = auth.get('company_culture', '') if auth else ''
+        questions = generate_interview_questions(
+            job_title=job.get('title', ''),
+            job_description=job.get('description', ''),
+            skill_condition=job.get('skill_condition', ''),
+            company_info=company_info,
+            company_culture=company_culture,
+            cv=resume.get('cv_link', ''),
+            cover_letter=resume.get('coverletter_link', ''),
+            stage=stage
+        )
+        # Determine which field to update
+        field_map = {
+            'Initial Interview': 'initial_interview_question',
+            'Final Interview': 'final_interview_question',
+            'Secondary Interview': 'scondary_interview_question',
+        }
+        question_field = field_map.get(stage)
+        if question_field:
+            supabase.table('resumes').update({question_field: questions}).eq('id', resume_id).execute()
+        return jsonify({'questions': questions}), 200
+    except Exception as e:
+        print(e)
+        return jsonify({'error': 'Failed to generate interview questions'}), 500
+
+@app.route('/interview/schedule', methods=['POST'])
+def schedule_interview():
+    data = request.get_json()
+    resume_id = data.get('resume_id')
+    stage = data.get('stage')
+    schedule = data.get('schedule')  # Expecting a dict with date, time, meet_link, notes (optional)
+    if not resume_id or not stage or not schedule:
+        return jsonify({'error': 'Missing resume_id, stage, or schedule'}), 400
+    # Validate required fields in schedule
+    date = schedule.get('date')
+    time = schedule.get('time')
+    meet_link = schedule.get('meet_link')
+    notes = schedule.get('notes', '')
+    if not date or not time or not meet_link:
+        return jsonify({'error': 'Missing date, time, or meet_link in schedule'}), 400
+    # Determine which field to update
+    field_map = {
+        'Initial Interview': 'initial_interview_schedule',
+        'Final Interview': 'final_interview_schedule',
+        'Secondary Interview': 'scondary_interview_schedule',
+    }
+    schedule_field = field_map.get(stage)
+    if not schedule_field:
+        return jsonify({'error': 'Invalid stage for scheduling'}), 400
+    try:
+        # Store the whole schedule JSON
+        supabase.table('resumes').update({schedule_field: schedule}).eq('id', resume_id).execute()
+        return jsonify({'message': f'{stage} scheduled', 'schedule': schedule}), 200
+    except Exception as e:
+        print(e)
+        return jsonify({'error': 'Failed to schedule interview'}), 500
+
+@app.route('/add-interview-details', methods=['POST'])
+def add_interview_details():
+    data = request.get_json()
+    resume_id = data.get('resume_id')
+    details = data.get('details')  # JSON object
+    if not resume_id or details is None:
+        return jsonify({'error': 'Missing resume_id or details'}), 400
+    try:
+        # Fetch resume
+        resume = supabase.table('resumes').select('*').eq('id', resume_id).single().execute().data
+        if not resume:
+            return jsonify({'error': 'Resume not found'}), 404
+        stage = data.get('stage') or details.get('stage')
+        if not stage:
+            return jsonify({'error': 'Missing stage'}), 400
+        # Determine which field to update
+        field_map = {
+            'Initial Interview': 'initial_details',
+            'Final Interview': 'final_details',
+            'Secondary Interview': 'secondary_details',
+        }
+        score_field_map = {
+            'Initial Interview': 'initial_interview_score',
+            'Final Interview': 'final_interview_score',
+            'Secondary Interview': 'scondary_interview_score',
+        }
+        suggestion_field_map = {
+            'Initial Interview': 'initial_interview_suggestion',
+            'Final Interview': 'final_interview_suggestion',
+            'Secondary Interview': 'scondary_interview_suggestion',
+        }
+        details_field = field_map.get(stage)
+        score_field = score_field_map.get(stage)
+        suggestion_field = suggestion_field_map.get(stage)
+        if not details_field or not score_field or not suggestion_field:
+            return jsonify({'error': 'Invalid stage for interview details'}), 400
+        # Get total_weighted_score and previous interview scores
+        total_weighted_score = resume.get('total_weighted_score', 0)
+        prev_scores = []
+        if stage == 'Initial Interview':
+            prev_scores = []
+        elif stage == 'Secondary Interview':
+            prev_scores = [resume.get('initial_interview_score', 0)]
+        elif stage == 'Final Interview':
+            prev_scores = [resume.get('initial_interview_score', 0), resume.get('scondary_interview_score', 0)]
+        # Get job info
+        job = supabase.table('jobs').select('title', 'description', 'skill_condition').eq('id', resume['job_id']).single().execute().data
+        job_title = job.get('title', '') if job else ''
+        job_description = job.get('description', '') if job else ''
+        skill_condition = job.get('skill_condition', '') if job else ''
+        # Save details
+        supabase.table('resumes').update({details_field: details}).eq('id', resume_id).execute()
+        # Evaluate and update score and suggestion
+        eval_result = evaluate_interview_performance(
+            stage, details, total_weighted_score, prev_scores, job_title, job_description, skill_condition
+        )
+        supabase.table('resumes').update({score_field: eval_result['score'], suggestion_field: eval_result['suggestion']}).eq('id', resume_id).execute()
+        # Update total_weighted_score with the new score
+        supabase.table('resumes').update({'total_weighted_score': eval_result['score']}).eq('id', resume_id).execute()
+        return jsonify({'message': f'{stage} details added', 'details': details, 'score': eval_result['score'], 'suggestion': eval_result['suggestion']}), 200
+    except Exception as e:
+        print(e)
+        return jsonify({'error': 'Failed to add interview details'}), 500
+
+@app.route('/interviews', methods=['GET'])
+def get_interviews():
+    owner_id, error_response, status_code = get_owner_id_from_jwt()
+    if error_response:
+        return error_response, status_code
+    # Accept 'stage' as a query parameter
+    stage = request.args.get('stage')
+    stages_param = request.args.get('stages')
+    stages_list = [s.strip() for s in stages_param.split(',')] if stages_param else None
+    column = WORKFLOW_STEP_TO_COLUMN.get(stage) if stage else None
+    next_column = None
+    try:
+        # Get all jobs for the user
+        jobs_result = supabase.table('jobs').select('id', 'title').eq('owner_id', owner_id).execute()
+        jobs = jobs_result.data or []
+        job_map = {job['id']: job for job in jobs}
+        # Get stage order from workflow for the user
+        workflow_result = supabase.table('workflow').select('workflow_process').eq('user_id', owner_id).single().execute()
+        workflow_dict = workflow_result.data['workflow_process']
+        step_keys = sorted(workflow_dict.keys(), key=lambda x: int(x.replace('step', '')))
+        stage_order_names = [workflow_dict[k] for k in step_keys]
+        # Map stage names to boolean and schedule fields
+        stage_to_bool = {
+            'Application Screening': 'is_screening',
+            'Initial Interview': 'is_initial_interview',
+            'Secondary Interview': 'is_secondary_interview',
+            'Assessment': 'in_assessment',
+            'Final Interview': 'in_final_interview',
+            'Offer Stage': 'is_hired',
+        }
+        stage_to_schedule = {
+            'Initial Interview': 'initial_interview_schedule',
+            'Secondary Interview': 'scondary_interview_schedule',
+            'Final Interview': 'final_interview_schedule',
+        }
+        # Build dynamic stage order for logic
+        stage_order = []
+        for s in stage_order_names:
+            stage_order.append((s, stage_to_bool.get(s), stage_to_schedule.get(s)))
+        # If stage is provided, get workflow for the user to determine next_column
+        if column:
+            try:
+                idx = stage_order_names.index(stage)
+                if idx + 1 < len(stage_order_names):
+                    next_stage = stage_order_names[idx + 1]
+                    next_column = stage_to_bool.get(next_stage)
+            except Exception:
+                pass
+        # Get all resumes for these jobs, but filter by stage if provided
+        job_ids = [job['id'] for job in jobs]
+        if not job_ids:
+            response = jsonify({'upcoming_interviews': [], 'past_interviews': []})
+            response.status_code = 200
+            return response
+        if column:
+            print(job_ids, column, next_column)
+            resumes_query = supabase.table('resumes').select('*').in_('job_id', job_ids).eq(column, True)
+            if next_column:
+                # Accept both False and None for next_column (correct syntax)
+                resumes_query = resumes_query.or_(f"{next_column}.eq.false,{next_column}.is.null")
+            resumes_result = resumes_query.execute()
+            resumes = resumes_result.data or []
+            print(resumes)
+        else:
+            resumes_result = supabase.table('resumes').select('*').in_('job_id', job_ids).execute()
+            resumes = resumes_result.data or []
+        # Now, continue with the rest of the logic as before
+        upcoming_interviews = []
+        past_interviews = []
+        now = datetime.now()
+        for resume in resumes:
+            # Find current stage using next-stage methodology
+            current_stage = None
+            next_stage = None
+            for idx, (s, col_s, _) in enumerate(stage_order):
+                if resume.get(col_s):
+                    if idx + 1 == len(stage_order) or not resume.get(stage_order[idx + 1][1]):
+                        current_stage = s
+                        next_stage = stage_order[idx + 1][0] if idx + 1 < len(stage_order) else None
+                        break
+            # If stages_list is provided, only process resumes whose current_stage is in stages_list
+            if stages_list and (not current_stage or current_stage not in stages_list):
+                continue
+            # Only check the schedule for the current stage
+            schedule_field = stage_to_schedule.get(current_stage)
+            if schedule_field and resume.get(schedule_field):
+                schedule = resume[schedule_field]
+                date_str = schedule.get('date')
+                time_str = schedule.get('time')
+                if date_str and time_str:
+                    try:
+                        dt_str = f"{date_str} {time_str}"
+                        try:
+                            interview_dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+                        except Exception:
+                            interview_dt = datetime.strptime(dt_str, "%Y-%m-%d %I:%M %p")
+                    except Exception:
+                        interview_dt = None
+                    print(f"Parsed interview_dt for resume {resume['id']}: {interview_dt}")
+                    interview_info = {
+                        'job_id': resume['job_id'],
+                        'job_title': job_map.get(resume['job_id'], {}).get('title', ''),
+                        'resume_id': resume['id'],
+                        'applicant_name': resume.get('applicant_name', ''),
+                        'email': resume.get('email', ''),
+                        'stage': current_stage,
+                        'schedule': schedule,
+                        'current_stage': current_stage,
+                        'next_stage': next_stage
+                    }
+                    if interview_dt:
+                        if interview_dt >= now:
+                            upcoming_interviews.append(interview_info)
+                        else:
+                            past_interviews.append(interview_info)
+        response = jsonify({'upcoming_interviews': upcoming_interviews, 'past_interviews': past_interviews})
+        response.status_code = 200
+        return response
+    except Exception as e:
+        print(e)
+        response = jsonify({'error': 'Failed to fetch interviews'})
+        response.status_code = 500
+        return response
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
