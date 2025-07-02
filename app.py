@@ -460,5 +460,75 @@ def update_company_info():
         print(f"Error updating company info: {e}")
         return jsonify({'error': 'Failed to update company info'}), 500
 
+@app.route('/workflow', methods=['POST'])
+def upsert_workflow():
+    # Get JWT from Authorization header
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return jsonify({'error': 'Missing or invalid Authorization header'}), 401
+    token = auth_header.split(' ')[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        user_id = payload.get('id')
+        if not user_id:
+            return jsonify({'error': 'Invalid token: no user id'}), 401
+    except Exception:
+        return jsonify({'error': 'Invalid or expired token'}), 401
+
+    data = request.get_json()
+    workflow_process = data.get('workflow_process')
+    if workflow_process is None:
+        return jsonify({'error': 'Missing workflow_process'}), 400
+
+    try:
+        existing = supabase.table('workflow').select('*').eq('user_id', user_id).single().execute()
+        if existing.data:
+            result = supabase.table('workflow').update({'workflow_process': workflow_process}).eq('user_id', user_id).execute()
+            if not result.data:
+                return jsonify({'error': 'Failed to update workflow'}), 500
+            return jsonify({'workflow': result.data[0], 'action': 'updated'}), 200
+        else:
+            result = supabase.table('workflow').insert({'user_id': user_id, 'workflow_process': workflow_process}).execute()
+            if not result.data:
+                return jsonify({'error': 'Failed to create workflow'}), 500
+            return jsonify({'workflow': result.data[0], 'action': 'created'}), 201
+    except Exception as e:
+        print(f'Error in /workflow: {e}')
+        return jsonify({'error': 'Failed to upsert workflow'}), 500
+
+@app.route('/workflow', methods=['GET'])
+def get_or_create_workflow():
+    # Get JWT from Authorization header
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return jsonify({'error': 'Missing or invalid Authorization header'}), 401
+    token = auth_header.split(' ')[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        user_id = payload.get('id')
+        if not user_id:
+            return jsonify({'error': 'Invalid token: no user id'}), 401
+    except Exception:
+        return jsonify({'error': 'Invalid or expired token'}), 401
+
+    try:
+        existing = supabase.table('workflow').select('*').eq('user_id', user_id).single().execute()
+        if existing.data:
+            return jsonify({'workflow': existing.data}), 200
+        else:
+            default_workflow = {
+                'step1': 'Application Screening',
+                'step2': 'Assessment',
+                'step3': 'Final Interview',
+                'step4': 'Offer Stage'
+            }
+            result = supabase.table('workflow').insert({'user_id': user_id, 'workflow_process': default_workflow}).execute()
+            if not result.data:
+                return jsonify({'error': 'Failed to create default workflow'}), 500
+            return jsonify({'workflow': result.data[0], 'action': 'created_default'}), 201
+    except Exception as e:
+        print(f'Error in GET /workflow: {e}')
+        return jsonify({'error': 'Failed to get or create workflow'}), 500
+
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
