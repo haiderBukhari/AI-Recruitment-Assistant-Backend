@@ -18,7 +18,10 @@ from companyConfigExtractor import run_company_extraction
 from flask import abort
 from interviewGenerationAgent import generate_interview_questions
 from interviewevaluator import evaluate_interview_performance
-from datetime import datetime
+from datetime import datetime, timedelta
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -79,7 +82,6 @@ def signup():
     try:
         existing = supabase.table('authentication').select('id').eq('email', email).execute()
 
-        print(existing)
         if existing.data:
             return jsonify({'error': 'Email already registered'}), 409
 
@@ -92,7 +94,7 @@ def signup():
         token = jwt.encode({
             'id': user_id,
             'email': email,
-            'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)
+            'exp': datetime.utcnow() + timedelta(days=7)
         }, JWT_SECRET, algorithm='HS256')
 
         QSTASH_ENDPOINT = "https://qstash.upstash.io/v2/publish/https://talo-recruitment.vercel.app/fetch-company"
@@ -130,7 +132,7 @@ def login():
     token = jwt.encode({
         'id': user_data['id'],
         'email': email,
-        'exp': datetime.datetime.utcnow() + datetime.timedelta(days=7)
+        'exp': datetime.utcnow() + timedelta(days=7)
     }, JWT_SECRET, algorithm='HS256')
     return jsonify({'token': token, 'id': user_data['id']})
 
@@ -294,21 +296,21 @@ def get_all_jobs():
     # Accept 'stage' as a query parameter
     stage = request.args.get('stage')
     column = WORKFLOW_STEP_TO_COLUMN.get(stage) if stage else None
+
     try:
         result = supabase.table('jobs').select('*').eq('owner_id', owner_id).execute()
         jobs = result.data or []
         jobs_with_counts = []
-        # If stage is provided, get workflow for the user
         workflow = None
         next_column = None
         if column:
             try:
                 workflow_result = supabase.table('workflow').select('workflow_process').eq('user_id', owner_id).single().execute()
                 workflow_dict = workflow_result.data['workflow_process']
-                # Find the order of steps
+
                 step_keys = sorted(workflow_dict.keys(), key=lambda x: int(x.replace('step', '')))
                 step_names = [workflow_dict[k] for k in step_keys]
-                # Find index of current stage
+
                 if stage in step_names:
                     idx = step_names.index(stage)
                     # Get next stage column if exists
@@ -327,7 +329,6 @@ def get_all_jobs():
                     resumes_query = resumes_query.eq(next_column, False)
                 resumes_result = resumes_query.execute()
 
-                print(resumes_result)
                 count = len(resumes_result.data) if resumes_result.data else 0
                 job_info['resume_count_in_stage'] = count
                 job_info['stage'] = stage
@@ -452,7 +453,6 @@ def submit_resume():
             "cover_letter": coverletter_link
         }
         response = requests.post(QSTASH_ENDPOINT, headers=headers, json=payload)
-        print(QSTASH_TOKEN, response, response.text)
         return jsonify({'resume': result}), 201
     except Exception as e:
         print(e)
@@ -937,14 +937,12 @@ def get_interviews():
             response.status_code = 200
             return response
         if column:
-            print(job_ids, column, next_column)
             resumes_query = supabase.table('resumes').select('*').in_('job_id', job_ids).eq(column, True)
             if next_column:
                 # Accept both False and None for next_column (correct syntax)
                 resumes_query = resumes_query.or_(f"{next_column}.eq.false,{next_column}.is.null")
             resumes_result = resumes_query.execute()
             resumes = resumes_result.data or []
-            print(resumes)
         else:
             resumes_result = supabase.table('resumes').select('*').in_('job_id', job_ids).execute()
             resumes = resumes_result.data or []
@@ -980,7 +978,6 @@ def get_interviews():
                             interview_dt = datetime.strptime(dt_str, "%Y-%m-%d %I:%M %p")
                     except Exception:
                         interview_dt = None
-                    print(f"Parsed interview_dt for resume {resume['id']}: {interview_dt}")
                     interview_info = {
                         'job_id': resume['job_id'],
                         'job_title': job_map.get(resume['job_id'], {}).get('title', ''),
@@ -1005,6 +1002,219 @@ def get_interviews():
         response = jsonify({'error': 'Failed to fetch interviews'})
         response.status_code = 500
         return response
+
+@app.route('/jobs/<job_id>/assessments/candidates', methods=['GET'])
+def get_assessment_candidates(job_id):
+    # Accept 'stage' as a query parameter, default to 'Assessment'
+    stage = request.args.get('stage', 'Assessment')
+    column = WORKFLOW_STEP_TO_COLUMN.get(stage)
+    if not column:
+        return jsonify({'error': 'Invalid or missing stage'}), 400
+    try:
+        # Get job info for title and owner_id
+        job_result = supabase.table('jobs').select('title', 'owner_id').eq('id', job_id).single().execute()
+        if not job_result or not job_result.data:
+            return jsonify({'error': 'Job not found'}), 404
+        job_title = job_result.data['title']
+        owner_id = job_result.data['owner_id']
+        # Get workflow for the job's owner
+        workflow_result = supabase.table('workflow').select('workflow_process').eq('user_id', owner_id).single().execute()
+        workflow_dict = workflow_result.data['workflow_process']
+        step_keys = sorted(workflow_dict.keys(), key=lambda x: int(x.replace('step', '')))
+        step_names = [workflow_dict[k] for k in step_keys]
+        # Find index of current stage
+        next_column = None
+        if stage in step_names:
+            idx = step_names.index(stage)
+            if idx + 1 < len(step_names):
+                next_stage = step_names[idx + 1]
+                next_column = WORKFLOW_STEP_TO_COLUMN.get(next_stage)
+        # Query resumes where current stage is True and next stage is False or None
+        resumes_query = supabase.table('resumes').select('*').eq('job_id', job_id).eq(column, True)
+        if next_column:
+            resumes_query = resumes_query.or_(f"{next_column}.eq.false,{next_column}.is.null")
+        resumes_result = resumes_query.execute()
+        resumes = resumes_result.data or []
+        candidates = []
+        for resume in resumes:
+            candidate = {
+                'candidate_name': resume.get('applicant_name') or resume.get('full_name') or resume.get('candidate_name', ''),
+                'email': resume.get('email', ''),
+                'id': resume.get('id', ''),
+                'job_title': job_title,
+                'status': resume.get('status', ''),
+                'score': resume.get('score'),
+                'time_spent': resume.get('time_spent'),
+                'assignment_sent': resume.get('assignment_sent'),
+                'assignment_submission': resume.get('assignment_submission'),
+                'assignment_submission_link': resume.get('assignment_submission_link'),
+                'assignment_template': resume.get('assignment_template'),
+                'assignment_feedback': resume.get('assignment_feedback'),
+            }
+            candidates.append(candidate)
+        return jsonify({'candidates': candidates}), 200
+    except Exception as e:
+        print(f"Error in get_assessment_candidates: {e}")
+        return jsonify({'error': 'Failed to fetch assessment candidates'}), 500
+
+@app.route('/assessments/create', methods=['POST'])
+def create_assessment():
+    data = request.get_json()
+    resume_id = data.get('resume_id')
+    details = data.get('details')  # JSON object for assignment_template
+    if not resume_id or details is None:
+        return jsonify({'error': 'Missing resume_id or details'}), 400
+    try:
+        # Set assignment_sent to now
+        from datetime import datetime
+        assignment_sent = datetime.utcnow().isoformat() + 'Z'
+        # Fetch current assignment_template (could be None)
+        resume_result = supabase.table('resumes').select('assignment_template', 'email').eq('id', resume_id).single().execute()
+        assignment_template = resume_result.data.get('assignment_template') if resume_result and resume_result.data else None
+        receiver_email = resume_result.data.get('email') if resume_result and resume_result.data else None
+        if not receiver_email:
+            return jsonify({'error': 'Candidate email not found'}), 404
+        # If assignment_template is not a list, make it a list
+        if not isinstance(assignment_template, list):
+            assignment_template = []
+        # Append new details
+        assignment_template.append(details)
+        # Update the resume
+        update_data = {
+            'assignment_sent': assignment_sent,
+            'assignment_template': assignment_template
+        }
+        result = supabase.table('resumes').update(update_data).eq('id', resume_id).execute()
+        if not result.data:
+            return jsonify({'error': 'Failed to create assessment'}), 500
+        # Send email notification to candidate
+        sender_email = os.environ.get('SENDER_EMAIL')
+        app_password = os.environ.get('APP_PASSWORD')
+        candidate_name = resume_result.data.get('applicant_name') or resume_result.data.get('full_name') or resume_result.data.get('candidate_name', '')
+        job_id = resume_result.data.get('job_id')
+        job_title = ''
+        if job_id:
+            job_result = supabase.table('jobs').select('title').eq('id', job_id).single().execute()
+            if job_result and job_result.data:
+                job_title = job_result.data.get('title', '')
+        assignment_title = details.get('title', 'Assignment')
+        assignment_description = details.get('description', '')
+        assignment_deadline = details.get('deadline', '')
+        subject = f"Assignment for your job application: {job_title}"
+        assignment_link = f"https://talohr.vercel.app/viewassignment/{resume_id}"
+        body = f"Hello {candidate_name},\n\nYou have received a new assignment as part of your application for the position of {job_title}.\n\nAssignment Title: {assignment_title}\nDescription: {assignment_description}\n"
+        if assignment_deadline:
+            body += f"Deadline: {assignment_deadline}\n"
+        body += f"\nPlease view and complete your assignment at the following link:\n{assignment_link}\n\nBest regards,\nYour Recruitment Team\n"
+        message = MIMEMultipart()
+        message["From"] = sender_email
+        message["To"] = receiver_email
+        message["Subject"] = subject
+        message.attach(MIMEText(body, "plain"))
+        try:
+            with smtplib.SMTP("smtp.gmail.com", 587) as server:
+                server.starttls()
+                server.login(sender_email, app_password)
+                server.send_message(message)
+        except Exception as email_error:
+            print(f"Failed to send assignment email: {email_error}")
+            # Do not fail the API if email fails, just log
+        return jsonify({'message': 'Assessment created and email sent', 'resume': result.data[0]}), 201
+    except Exception as e:
+        print(f"Error in create_assessment: {e}")
+        return jsonify({'error': 'Failed to create assessment'}), 500
+
+@app.route('/assignments/<resume_id>', methods=['GET'])
+def get_assignment(resume_id):
+    try:
+        result = supabase.table('resumes').select('assignment_template', 'assignment_sent', 'assignment_submission', 'assignment_submission_link').eq('id', resume_id).single().execute()
+        if not result or not result.data:
+            return jsonify({'error': 'Assignment not found'}), 404
+        data = result.data
+        submitted = bool(data.get('assignment_submission') or data.get('assignment_submission_link'))
+        return jsonify({
+            'assignment_template': data.get('assignment_template'),
+            'assignment_sent': data.get('assignment_sent'),
+            'assignment_submission': data.get('assignment_submission'),
+            'assignment_submission_link': data.get('assignment_submission_link'),
+            'submitted': submitted
+        }), 200
+    except Exception as e:
+        print(f"Error in get_assignment: {e}")
+        return jsonify({'error': 'Failed to fetch assignment'}), 500
+
+@app.route('/assignments/<resume_id>', methods=['PUT'])
+def edit_assignment(resume_id):
+    data = request.get_json()
+    details = data.get('details')
+    if not details:
+        return jsonify({'error': 'Missing details'}), 400
+    try:
+        # Fetch current assignment_template
+        resume_result = supabase.table('resumes').select('assignment_template').eq('id', resume_id).single().execute()
+        assignment_template = resume_result.data.get('assignment_template') if resume_result and resume_result.data else None
+        if not assignment_template or not isinstance(assignment_template, list) or len(assignment_template) == 0:
+            # If no assignment exists, add as first
+            assignment_template = [details]
+        else:
+            # Update the last assignment
+            assignment_template[-1] = details
+        # Optionally update assignment_sent to now
+        assignment_sent = datetime.utcnow().isoformat() + 'Z'
+        update_data = {
+            'assignment_template': assignment_template,
+            'assignment_sent': assignment_sent
+        }
+        result = supabase.table('resumes').update(update_data).eq('id', resume_id).execute()
+        if not result.data:
+            return jsonify({'error': 'Failed to update assignment'}), 500
+        return jsonify({'message': 'Assignment updated', 'assignment_template': assignment_template}), 200
+    except Exception as e:
+        print(f"Error in edit_assignment: {e}")
+        return jsonify({'error': 'Failed to update assignment'}), 500
+
+@app.route('/assignments/<resume_id>/submit', methods=['POST'])
+def submit_assignment(resume_id):
+    data = request.get_json()
+    submission_details = data.get('details')
+    if not submission_details:
+        return jsonify({'error': 'Missing submission details'}), 400
+    try:
+        # Set assignment_submission to now
+        assignment_submission = datetime.utcnow().isoformat() + 'Z'
+        # Fetch current full_assignment_submission
+        resume_result = supabase.table('resumes').select('full_assignment_submission').eq('id', resume_id).single().execute()
+        full_assignment_submission = resume_result.data.get('full_assignment_submission') if resume_result and resume_result.data else None
+        if not isinstance(full_assignment_submission, list):
+            full_assignment_submission = []
+        full_assignment_submission.append(submission_details)
+        update_data = {
+            'assignment_submission': assignment_submission,
+            'full_assignment_submission': full_assignment_submission
+        }
+        result = supabase.table('resumes').update(update_data).eq('id', resume_id).execute()
+        if not result.data:
+            return jsonify({'error': 'Failed to submit assignment'}), 500
+        return jsonify({'message': 'Assignment submitted', 'assignment_submission': assignment_submission, 'full_assignment_submission': full_assignment_submission}), 200
+    except Exception as e:
+        print(f"Error in submit_assignment: {e}")
+        return jsonify({'error': 'Failed to submit assignment'}), 500
+
+@app.route('/assignments/<resume_id>/submitted', methods=['GET'])
+def get_submitted_assignment(resume_id):
+    try:
+        result = supabase.table('resumes').select('assignment_submission', 'full_assignment_submission', 'assignment_template').eq('id', resume_id).single().execute()
+        if not result or not result.data:
+            return jsonify({'error': 'Submitted assignment not found'}), 404
+        data = result.data
+        return jsonify({
+            'assignment_submission': data.get('assignment_submission'),
+            'full_assignment_submission': data.get('full_assignment_submission'),
+            'assignment_template': data.get('assignment_template')
+        }), 200
+    except Exception as e:
+        print(f"Error in get_submitted_assignment: {e}")
+        return jsonify({'error': 'Failed to fetch submitted assignment'}), 500
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
