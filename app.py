@@ -22,6 +22,7 @@ from datetime import datetime, timedelta
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from assignmentevaluator import evaluate_assignment_performance
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -223,6 +224,7 @@ def evaluate():
             'skill_reason': result.get('skill_reason'),
             'skill_score': result.get('skill_score'),
             'total_weighted_score': result.get('total_weighted_score'),
+            'screening_score': result.get('total_weighted_score'),
             'evaluated': True
         }
         try:
@@ -399,6 +401,7 @@ def submit_resume():
     cv_link = data.get('cv_link')
     coverletter_link = data.get('coverletter_link')
     job_id = data.get('job_id')
+    picture = data.get('picture')  # New field for candidate picture
 
     if not all([applicant_name, email, cv_link, job_id]):
         return jsonify({'error': 'Missing required fields'}), 400
@@ -426,7 +429,8 @@ def submit_resume():
         'email': email,
         'cv_link': cv_link,
         'coverletter_link': coverletter_link,
-        'job_id': job_id
+        'job_id': job_id,
+        'picture': picture  # Store the picture field
     }
 
     try:
@@ -762,6 +766,36 @@ def generate_interview():
         auth = supabase.table('authentication').select('company_details', 'company_culture').eq('id', job['owner_id']).single().execute().data
         company_info = auth.get('company_details', '') if auth else ''
         company_culture = auth.get('company_culture', '') if auth else ''
+        # Gather previous questions and suggestions
+        previous_questions = {}
+        previous_suggestions = {}
+        if stage == 'Initial Interview':
+            if resume.get('initial_interview_question'):
+                previous_questions['initial_interview'] = resume.get('initial_interview_question')
+            if resume.get('initial_interview_suggestion'):
+                previous_suggestions['initial_interview'] = resume.get('initial_interview_suggestion')
+        elif stage == 'Secondary Interview':
+            if resume.get('initial_interview_question'):
+                previous_questions['initial_interview'] = resume.get('initial_interview_question')
+            if resume.get('scondary_interview_question'):
+                previous_questions['secondary_interview'] = resume.get('scondary_interview_question')
+            if resume.get('initial_interview_suggestion'):
+                previous_suggestions['initial_interview'] = resume.get('initial_interview_suggestion')
+            if resume.get('scondary_interview_suggestion'):
+                previous_suggestions['secondary_interview'] = resume.get('scondary_interview_suggestion')
+        elif stage == 'Final Interview':
+            if resume.get('initial_interview_question'):
+                previous_questions['initial_interview'] = resume.get('initial_interview_question')
+            if resume.get('scondary_interview_question'):
+                previous_questions['secondary_interview'] = resume.get('scondary_interview_question')
+            if resume.get('final_interview_question'):
+                previous_questions['final_interview'] = resume.get('final_interview_question')
+            if resume.get('initial_interview_suggestion'):
+                previous_suggestions['initial_interview'] = resume.get('initial_interview_suggestion')
+            if resume.get('scondary_interview_suggestion'):
+                previous_suggestions['secondary_interview'] = resume.get('scondary_interview_suggestion')
+            if resume.get('final_interview_suggestion'):
+                previous_suggestions['final_interview'] = resume.get('final_interview_suggestion')
         questions = generate_interview_questions(
             job_title=job.get('title', ''),
             job_description=job.get('description', ''),
@@ -770,7 +804,9 @@ def generate_interview():
             company_culture=company_culture,
             cv=resume.get('cv_link', ''),
             cover_letter=resume.get('coverletter_link', ''),
-            stage=stage
+            stage=stage,
+            previous_questions=previous_questions,
+            previous_suggestions=previous_suggestions
         )
         # Determine which field to update
         field_map = {
@@ -1069,7 +1105,7 @@ def create_assessment():
         from datetime import datetime
         assignment_sent = datetime.utcnow().isoformat() + 'Z'
         # Fetch current assignment_template (could be None)
-        resume_result = supabase.table('resumes').select('assignment_template', 'email').eq('id', resume_id).single().execute()
+        resume_result = supabase.table('resumes').select('assignment_template', 'email', 'job_id', 'applicant_name', 'full_name', 'candidate_name').eq('id', resume_id).single().execute()
         assignment_template = resume_result.data.get('assignment_template') if resume_result and resume_result.data else None
         receiver_email = resume_result.data.get('email') if resume_result and resume_result.data else None
         if not receiver_email:
@@ -1182,20 +1218,51 @@ def submit_assignment(resume_id):
     try:
         # Set assignment_submission to now
         assignment_submission = datetime.utcnow().isoformat() + 'Z'
-        # Fetch current full_assignment_submission
-        resume_result = supabase.table('resumes').select('full_assignment_submission').eq('id', resume_id).single().execute()
-        full_assignment_submission = resume_result.data.get('full_assignment_submission') if resume_result and resume_result.data else None
+        # Fetch current full_assignment_submission and assignment_template, job_id, total_weighted_score
+        resume_result = supabase.table('resumes').select('full_assignment_submission', 'assignment_template', 'job_id', 'total_weighted_score').eq('id', resume_id).single().execute()
+        data_row = resume_result.data if resume_result and resume_result.data else {}
+        full_assignment_submission = data_row.get('full_assignment_submission')
         if not isinstance(full_assignment_submission, list):
             full_assignment_submission = []
         full_assignment_submission.append(submission_details)
+        assignment_template = data_row.get('assignment_template')
+        job_id = data_row.get('job_id')
+        total_weighted_score = data_row.get('total_weighted_score', 0)
+        # Fetch job info
+        job_title = ''
+        job_description = ''
+        if job_id:
+            job_result = supabase.table('jobs').select('title', 'description').eq('id', job_id).single().execute()
+            if job_result and job_result.data:
+                job_title = job_result.data.get('title', '')
+                job_description = job_result.data.get('description', '')
+        # Evaluate assignment
+        eval_result = evaluate_assignment_performance(
+            job_title=job_title,
+            job_description=job_description,
+            assignment_template=assignment_template,
+            full_assignment_submission=full_assignment_submission,
+            total_weighted_score=total_weighted_score
+        )
+        # Update resume with evaluation
         update_data = {
             'assignment_submission': assignment_submission,
-            'full_assignment_submission': full_assignment_submission
+            'full_assignment_submission': full_assignment_submission,
+            'assignment_feedback': eval_result.get('assignment_feedback'),
+            'score': eval_result.get('score'),
+            'total_weighted_score': eval_result.get('total_weighted_score')
         }
         result = supabase.table('resumes').update(update_data).eq('id', resume_id).execute()
         if not result.data:
             return jsonify({'error': 'Failed to submit assignment'}), 500
-        return jsonify({'message': 'Assignment submitted', 'assignment_submission': assignment_submission, 'full_assignment_submission': full_assignment_submission}), 200
+        return jsonify({
+            'message': 'Assignment submitted and evaluated',
+            'assignment_submission': assignment_submission,
+            'full_assignment_submission': full_assignment_submission,
+            'assignment_feedback': eval_result.get('assignment_feedback'),
+            'score': eval_result.get('score'),
+            'total_weighted_score': eval_result.get('total_weighted_score')
+        }), 200
     except Exception as e:
         print(f"Error in submit_assignment: {e}")
         return jsonify({'error': 'Failed to submit assignment'}), 500
@@ -1203,18 +1270,191 @@ def submit_assignment(resume_id):
 @app.route('/assignments/<resume_id>/submitted', methods=['GET'])
 def get_submitted_assignment(resume_id):
     try:
-        result = supabase.table('resumes').select('assignment_submission', 'full_assignment_submission', 'assignment_template').eq('id', resume_id).single().execute()
+        result = supabase.table('resumes').select('assignment_submission', 'full_assignment_submission', 'assignment_template', 'assignment_feedback', 'score', 'total_weighted_score').eq('id', resume_id).single().execute()
         if not result or not result.data:
             return jsonify({'error': 'Submitted assignment not found'}), 404
         data = result.data
         return jsonify({
             'assignment_submission': data.get('assignment_submission'),
             'full_assignment_submission': data.get('full_assignment_submission'),
-            'assignment_template': data.get('assignment_template')
+            'assignment_template': data.get('assignment_template'),
+            'assignment_feedback': data.get('assignment_feedback'),
+            'score': data.get('score'),
+            'total_weighted_score': data.get('total_weighted_score')
         }), 200
     except Exception as e:
         print(f"Error in get_submitted_assignment: {e}")
         return jsonify({'error': 'Failed to fetch submitted assignment'}), 500
+
+@app.route('/offers/candidates', methods=['GET'])
+def get_offer_stage_candidates():
+    # Get JWT from Authorization header
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return jsonify({'error': 'Missing or invalid Authorization header'}), 401
+    token = auth_header.split(' ')[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        user_id = payload.get('id')
+        if not user_id:
+            return jsonify({'error': 'Invalid token: no user id'}), 401
+    except Exception:
+        return jsonify({'error': 'Invalid or expired token'}), 401
+    try:
+        # Get all jobs owned by this user
+        jobs_result = supabase.table('jobs').select('id').eq('owner_id', user_id).execute()
+        job_ids = [job['id'] for job in jobs_result.data] if jobs_result and jobs_result.data else []
+        if not job_ids:
+            return jsonify({'candidates': []}), 200
+        # Get all resumes in offer stage for these jobs
+        resumes_result = supabase.table('resumes').select('*').in_('job_id', job_ids).eq('in_final_interview', True).eq('is_hired', True).execute()
+        resumes = resumes_result.data or []
+        candidates = []
+        for resume in resumes:
+            candidate = dict(resume)
+            candidate['offer_details'] = resume.get('offer_details')
+            candidates.append(candidate)
+        return jsonify({'candidates': candidates}), 200
+    except Exception as e:
+        print(f"Error in get_offer_stage_candidates: {e}")
+        return jsonify({'error': 'Failed to fetch offer stage candidates'}), 500
+
+@app.route('/offers/make', methods=['POST'])
+def make_offer():
+    data = request.get_json()
+    resume_id = data.get('resume_id')
+    offer_details = data.get('offer_details')
+    if not resume_id or offer_details is None:
+        return jsonify({'error': 'Missing resume_id or offer_details'}), 400
+    try:
+        # Get JWT from Authorization header
+        auth_header = request.headers.get('Authorization', '')
+        if not auth_header.startswith('Bearer '):
+            return jsonify({'error': 'Missing or invalid Authorization header'}), 401
+        token = auth_header.split(' ')[1]
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        user_id = payload.get('id')
+        if not user_id:
+            return jsonify({'error': 'Invalid token: no user id'}), 401
+        # Fetch the resume and check job ownership
+        resume_result = supabase.table('resumes').select('job_id').eq('id', resume_id).single().execute()
+        if not resume_result or not resume_result.data:
+            return jsonify({'error': 'Resume not found'}), 404
+        job_id = resume_result.data.get('job_id')
+        job_result = supabase.table('jobs').select('owner_id').eq('id', job_id).single().execute()
+        if not job_result or not job_result.data or job_result.data.get('owner_id') != user_id:
+            return jsonify({'error': 'Unauthorized: not your job'}), 403
+        # Update the resume with offer_details
+        update_result = supabase.table('resumes').update({'offer_details': offer_details}).eq('id', resume_id).execute()
+        if not update_result or not update_result.data:
+            return jsonify({'error': 'Failed to update offer details'}), 500
+        return jsonify({'message': 'Offer made', 'resume': update_result.data[0]}), 200
+    except Exception as e:
+        print(f"Error in make_offer: {e}")
+        return jsonify({'error': 'Failed to make offer'}), 500
+
+@app.route('/candidates/all', methods=['GET'])
+def get_all_candidates():
+    # Get JWT from Authorization header
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return jsonify({'error': 'Missing or invalid Authorization header'}), 401
+    token = auth_header.split(' ')[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        user_id = payload.get('id')
+        if not user_id:
+            return jsonify({'error': 'Invalid token: no user id'}), 401
+    except Exception:
+        return jsonify({'error': 'Invalid or expired token'}), 401
+    try:
+        # Get all jobs owned by this user
+        jobs_result = supabase.table('jobs').select('id').eq('owner_id', user_id).execute()
+        job_ids = [job['id'] for job in jobs_result.data] if jobs_result and jobs_result.data else []
+        if not job_ids:
+            return jsonify({'candidates': []}), 200
+        # Get all resumes for these jobs
+        resumes_result = supabase.table('resumes').select('*').in_('job_id', job_ids).execute()
+        resumes = resumes_result.data or []
+        candidates = []
+        for resume in resumes:
+            candidate = dict(resume)
+            candidate['offer_details'] = resume.get('offer_details')
+            candidates.append(candidate)
+        return jsonify({'candidates': candidates}), 200
+    except Exception as e:
+        print(f"Error in get_all_candidates: {e}")
+        return jsonify({'error': 'Failed to fetch candidates'}), 500
+
+# @app.route('/jobs/total', methods=['GET'])
+# def get_total_jobs():
+#     # Get JWT from Authorization header
+#     auth_header = request.headers.get('Authorization', '')
+#     if not auth_header.startswith('Bearer '):
+#         return jsonify({'error': 'Missing or invalid Authorization header'}), 401
+#     token = auth_header.split(' ')[1]
+#     try:
+#         payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+#         user_id = payload.get('id')
+#         if not user_id:
+#             return jsonify({'error': 'Invalid token: no user id'}), 401
+#     except Exception:
+#         return jsonify({'error': 'Invalid or expired token'}), 401
+#     try:
+#         jobs_result = supabase.table('jobs').select('id').eq('owner_id', user_id).execute()
+#         total_jobs = len(jobs_result.data) if jobs_result and jobs_result.data else 0
+#         return jsonify({'total_jobs': total_jobs}), 200
+#     except Exception as e:
+#         print(f"Error in get_total_jobs: {e}")
+#         return jsonify({'error': 'Failed to fetch total jobs'}), 500
+
+@app.route('/candidates/<resume_id>', methods=['GET'])
+def get_single_candidate(resume_id):
+    # Get JWT from Authorization header
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return jsonify({'error': 'Missing or invalid Authorization header'}), 401
+    token = auth_header.split(' ')[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        user_id = payload.get('id')
+        if not user_id:
+            return jsonify({'error': 'Invalid token: no user id'}), 401
+    except Exception:
+        return jsonify({'error': 'Invalid or expired token'}), 401
+    try:
+        # Fetch the resume
+        resume_result = supabase.table('resumes').select('*').eq('id', resume_id).single().execute()
+        if not resume_result or not resume_result.data:
+            return jsonify({'error': 'Candidate not found'}), 404
+        resume = dict(resume_result.data)
+        resume['offer_details'] = resume.get('offer_details')
+        return jsonify({'candidate': resume}), 200
+    except Exception as e:
+        print(f"Error in get_single_candidate: {e}")
+        return jsonify({'error': 'Failed to fetch candidate'}), 500
+
+@app.route('/jobs/total', methods=['GET'])
+def get_all_jobs_details():
+    # Get JWT from Authorization header
+    auth_header = request.headers.get('Authorization', '')
+    if not auth_header.startswith('Bearer '):
+        return jsonify({'error': 'Missing or invalid Authorization header'}), 401
+    token = auth_header.split(' ')[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+        user_id = payload.get('id')
+        if not user_id:
+            return jsonify({'error': 'Invalid token: no user id'}), 401
+    except Exception:
+        return jsonify({'error': 'Invalid or expired token'}), 401
+    try:
+        jobs_result = supabase.table('jobs').select('*').eq('owner_id', user_id).execute()
+        jobs = jobs_result.data if jobs_result and jobs_result.data else []
+        return jsonify({'jobs': jobs}), 200
+    except Exception as e:
+        print(f"Error in get_all_jobs_details: {e}")
+        return jsonify({'error': 'Failed to fetch jobs'}), 500
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)

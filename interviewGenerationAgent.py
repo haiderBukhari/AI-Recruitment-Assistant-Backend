@@ -9,7 +9,19 @@ llm = ChatGoogleGenerativeAI(
     temperature=0
 )
 
-def generate_interview_questions(job_title, job_description, skill_condition, company_info, company_culture, cv, cover_letter, stage):
+def generate_interview_questions(job_title, job_description, skill_condition, company_info, company_culture, cv, cover_letter, stage, previous_questions=None, previous_suggestions=None):
+    previous_questions = previous_questions or {}
+    previous_suggestions = previous_suggestions or {}
+    # Build previous questions and suggestions text
+    prev_q_text = ""
+    if previous_questions:
+        prev_q_text += "Previous Interview Questions (do not repeat these):\n"
+        for k, v in previous_questions.items():
+            prev_q_text += f"- {k}: {v}\n"
+    if previous_suggestions:
+        prev_q_text += "Previous Interview Suggestions (use these to improve new questions):\n"
+        for k, v in previous_suggestions.items():
+            prev_q_text += f"- {k}: {v}\n"
     prompt = ChatPromptTemplate.from_template(
         f"""
         You are an expert technical interviewer. Generate a set of interview questions for the following interview stage: {{stage}}.
@@ -23,12 +35,15 @@ def generate_interview_questions(job_title, job_description, skill_condition, co
         Candidate CV: {{cv}}
         Cover Letter: {{cover_letter}}
         
+        {prev_q_text}
+        
         Please generate:
         - At least 10 Job-Related Questions (key: 'job'), ranging from easy to complex, covering all relevant technical and role-specific areas.
         - At least 6 Prior Experience Questions (key: 'prior_experience'), from basic to advanced, focusing on the candidate's past roles, achievements, and relevant experience.
         - At least 6 Soft Skills & Behavioral Questions (key: 'soft_skills'), from basic to advanced, covering teamwork, communication, leadership, and problem-solving.
         
         All lists must be non-empty and cover a range of difficulty.
+        Do NOT repeat any questions from previous interview rounds. Use previous suggestions to improve the quality and relevance of the new questions.
         
         Respond in the following JSON format:
         {{{{
@@ -47,7 +62,13 @@ def generate_interview_questions(job_title, job_description, skill_condition, co
         "cv": cv,
         "cover_letter": cover_letter,
         "stage": stage
-    }).content.strip()
+    }).content
+    # Ensure response is a string
+    if isinstance(response, list):
+        response = "\n".join(str(x) for x in response)
+    if not isinstance(response, str):
+        response = str(response)
+    response = response.strip()
     # Try to parse the response as JSON
     import json
     try:
