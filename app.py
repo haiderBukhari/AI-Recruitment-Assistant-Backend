@@ -1074,7 +1074,7 @@ def get_assessment_candidates(job_id):
         candidates = []
         for resume in resumes:
             candidate = {
-                'candidate_name': resume.get('applicant_name') or resume.get('full_name') or resume.get('candidate_name', ''),
+                'candidate_name': resume.get('applicant_name') or resume.get('full_name') or resume.get('applicant_name', ''),
                 'email': resume.get('email', ''),
                 'id': resume.get('id', ''),
                 'job_title': job_title,
@@ -1105,7 +1105,7 @@ def create_assessment():
         from datetime import datetime
         assignment_sent = datetime.utcnow().isoformat() + 'Z'
         # Fetch current assignment_template (could be None)
-        resume_result = supabase.table('resumes').select('assignment_template', 'email', 'job_id', 'applicant_name', 'full_name', 'candidate_name').eq('id', resume_id).single().execute()
+        resume_result = supabase.table('resumes').select('assignment_template', 'email', 'job_id', 'applicant_name').eq('id', resume_id).single().execute()
         assignment_template = resume_result.data.get('assignment_template') if resume_result and resume_result.data else None
         receiver_email = resume_result.data.get('email') if resume_result and resume_result.data else None
         if not receiver_email:
@@ -1126,7 +1126,7 @@ def create_assessment():
         # Send email notification to candidate
         sender_email = os.environ.get('SENDER_EMAIL')
         app_password = os.environ.get('APP_PASSWORD')
-        candidate_name = resume_result.data.get('applicant_name') or resume_result.data.get('full_name') or resume_result.data.get('candidate_name', '')
+        candidate_name = resume_result.data.get('applicant_name') or resume_result.data.get('full_name') or resume_result.data.get('applicant_name', '')
         job_id = resume_result.data.get('job_id')
         job_title = ''
         if job_id:

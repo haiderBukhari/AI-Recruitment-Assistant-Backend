@@ -22,18 +22,17 @@ def generate_interview_questions(job_title, job_description, skill_condition, co
         prev_q_text += "Previous Interview Suggestions (use these to improve new questions):\n"
         for k, v in previous_suggestions.items():
             prev_q_text += f"- {k}: {v}\n"
-    prompt = ChatPromptTemplate.from_template(
-        f"""
-        You are an expert technical interviewer. Generate a set of interview questions for the following interview stage: {{stage}}.
+    template_str = """
+        You are an expert technical interviewer. Generate a set of interview questions for the following interview stage: {stage}.
         The questions should be tailored to the candidate's background and the job requirements.
         
-        Job Title: {{job_title}}
-        Job Description: {{job_description}}
-        Skill Condition: {{skill_condition}}
-        Company Info: {{company_info}}
-        Company Culture: {{company_culture}}
-        Candidate CV: {{cv}}
-        Cover Letter: {{cover_letter}}
+        Job Title: {job_title}
+        Job Description: {job_description}
+        Skill Condition: {skill_condition}
+        Company Info: {company_info}
+        Company Culture: {company_culture}
+        Candidate CV: {cv}
+        Cover Letter: {cover_letter}
         
         {prev_q_text}
         
@@ -52,7 +51,7 @@ def generate_interview_questions(job_title, job_description, skill_condition, co
             "soft_skills": ["...", ...]
         }}}}
         """
-    )
+    prompt = ChatPromptTemplate.from_template(template_str)
     response = (prompt | llm).invoke({
         "job_title": job_title,
         "job_description": job_description,
@@ -61,7 +60,8 @@ def generate_interview_questions(job_title, job_description, skill_condition, co
         "company_culture": company_culture,
         "cv": cv,
         "cover_letter": cover_letter,
-        "stage": stage
+        "stage": stage,
+        "prev_q_text": prev_q_text
     }).content
     # Ensure response is a string
     if isinstance(response, list):
