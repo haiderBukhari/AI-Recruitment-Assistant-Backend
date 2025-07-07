@@ -23,6 +23,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from assignmentevaluator import evaluate_assignment_performance
+from assignmentGenerationAgent import generate_assignment
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -1460,6 +1461,51 @@ def get_all_jobs_details():
     except Exception as e:
         print(f"Error in get_all_jobs_details: {e}")
         return jsonify({'error': 'Failed to fetch jobs'}), 500
+
+@app.route('/assignment/generate', methods=['POST'])
+def generate_assignment_api():
+    data = request.get_json()
+    resume_id = data.get('resume_id')
+    difficulty_level = data.get('difficulty_level', 'mixed')
+    instructions = data.get('instructions', None)
+    if not resume_id:
+        return jsonify({'error': 'Missing resume_id'}), 400
+    try:
+        # Fetch resume
+        resume_result = supabase.table('resumes').select('*').eq('id', resume_id).single().execute()
+        resume = resume_result.data if resume_result and resume_result.data else None
+        if not resume:
+            return jsonify({'error': 'Resume not found'}), 404
+        job_id = resume.get('job_id')
+        if not job_id:
+            return jsonify({'error': 'Job ID not found in resume'}), 404
+        # Fetch job
+        job_result = supabase.table('jobs').select('title', 'description', 'skill_condition', 'owner_id').eq('id', job_id).single().execute()
+        job = job_result.data if job_result and job_result.data else None
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+        # Fetch company info
+        auth_result = supabase.table('authentication').select('company_details', 'company_culture').eq('id', job['owner_id']).single().execute()
+        auth = auth_result.data if auth_result and auth_result.data else None
+        company_info = auth.get('company_details', '') if auth else ''
+        company_culture = auth.get('company_culture', '') if auth else ''
+        # Generate assignment
+        assignment = generate_assignment(
+            job_title=job.get('title', ''),
+            job_description=job.get('description', ''),
+            skill_condition=job.get('skill_condition', ''),
+            company_info=company_info,
+            company_culture=company_culture,
+            difficulty_level=difficulty_level
+        )
+        # If instructions are provided, override
+        if instructions:
+            assignment['instructions'] = instructions
+        return jsonify({'assignment': assignment}), 200
+    except Exception as e:
+        print(f"Error in generate_assignment_api: {e}")
+        return jsonify({'error': 'Failed to generate assignment'}), 500
+
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=5000)
