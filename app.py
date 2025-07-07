@@ -6,7 +6,6 @@ from flask_cors import CORS
 from evaluator import run_full_evaluation
 from supabase import create_client, Client
 import bcrypt
-
 import requests
 import jwt
 from middleware import get_owner_id_from_jwt
@@ -406,6 +405,11 @@ def submit_resume():
 
     if not all([applicant_name, email, cv_link, job_id]):
         return jsonify({'error': 'Missing required fields'}), 400
+
+    # Check for duplicate resume (same email and job_id)
+    existing_resume = supabase.table('resumes').select('id').eq('email', email).eq('job_id', job_id).execute()
+    if existing_resume.data and len(existing_resume.data) > 0:
+        return jsonify({'error': 'Resume already submitted'}), 409
 
     job = supabase.table('jobs').select('title', 'description', 'skill_condition', 'owner_id', 'total_applicants').eq('id', job_id).single().execute()
 

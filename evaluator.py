@@ -83,14 +83,26 @@ def score_experience(state: State) -> State:
     score, reason, level, facts = extract_score_reason_level_facts(response)
 
     return {
+        **state,
         "experience_score": score,
         "experience_reason": reason,
         "level_suggestion": level,
         "experience_facts": facts
     }
 
-def score_skill_match(state: State) -> State:
+def extract_skill_summary(text: str):
+    score_match = re.search(r"Score:\s*(\d+)", text)
+    present_skills = re.findall(r"Present Skills:\s*((?:- .+\n?)+)", text)
+    missing_skills = re.findall(r"Missing/Weak Skills:\s*((?:- .+\n?)+)", text)
+    readiness_match = re.search(r"Overall Readiness and Gaps:\s*(.+)", text, re.DOTALL)
 
+    score = int(score_match.group(1)) if score_match else 0
+    present = [s.strip('- ').strip() for s in present_skills[0].strip().split('\n')] if present_skills else []
+    missing = [s.strip('- ').strip() for s in missing_skills[0].strip().split('\n')] if missing_skills else []
+    readiness = readiness_match.group(1).strip() if readiness_match else "No summary provided."
+    return score, present, missing, readiness
+
+def score_skill_match(state: State) -> State:
     prompt = ChatPromptTemplate.from_template(
         """
         Based on the following skill conditions strictly specified by HR:\n{skill_condition}" if skill_condition else "Based solely on the job description below
@@ -113,21 +125,30 @@ def score_skill_match(state: State) -> State:
 
         Respond with:
         Score: <0–100>
-        Reason: <Briefly explain the skill match including:
-        - Which relevant skills are present in the CV.
-        - Which required skills are missing or weak.
-        - Summary of overall readiness and gaps.>
+        Skills Summary:
+        Present Skills:
+        - skill 1
+        - skill 2
+        Missing/Weak Skills:
+        - skill 1
+        - skill 2
+        Overall Readiness and Gaps:
+        <summary text>
         """
-
     )
 
     response = (prompt | llm).invoke(state).content.strip()
+    score, present, missing, readiness = extract_skill_summary(response)
 
-    score, reason, *_ = extract_score_reason_level_facts(response)
-
+    skill_reason = (
+        f"- **Present Skills:** {'; '.join(present) if present else 'None'}\n"
+        f"- **Missing/Weak Skills:** {'; '.join(missing) if missing else 'None'}\n"
+        f"- **Overall Readiness and Gaps:** {readiness}"
+    )
     return {
+        **state,
         "skill_score": score,
-        "skill_reason": reason
+        "skill_reason": skill_reason
     }
 
 def score_culture_fit(state: State) -> State:
@@ -157,7 +178,11 @@ def score_culture_fit(state: State) -> State:
     )
     response = (prompt | llm).invoke(state).content.strip()
     score, reason, *_ = extract_score_reason_level_facts(response)
-    return {"culture_score": score, "culture_reason": reason}
+    return {
+        **state,
+        "culture_score": score,
+        "culture_reason": reason
+    }
 
 def score_company_fit(state: State) -> State:
     prompt = ChatPromptTemplate.from_template(
@@ -191,7 +216,11 @@ def score_company_fit(state: State) -> State:
     )
     response = (prompt | llm).invoke(state).content.strip()
     score, reason, *_ = extract_score_reason_level_facts(response)
-    return {"company_fit_score": score, "company_fit_reason": reason}
+    return {
+        **state,
+        "company_fit_score": score,
+        "company_fit_reason": reason
+    }
 
 def final_decision(state: State) -> State:
     weighted_score = (
@@ -209,6 +238,7 @@ def final_decision(state: State) -> State:
         recommendation = "Not a fit."
 
     return {
+        **state,
         "final_recommendation": recommendation,
         "total_weighted_score": round(weighted_score, 2)
     }
@@ -239,4 +269,4 @@ def run_full_evaluation(job_title, job_description, skill_condition, company_inf
         "cover_letter": cover_letter,
         "company_culture": company_culture
     }
-    return app.invoke(input_state) 
+    return app.invoke(input_state)  # type: ignore 
