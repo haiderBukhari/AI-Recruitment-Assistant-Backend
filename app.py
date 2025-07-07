@@ -6,6 +6,7 @@ from flask_cors import CORS
 from evaluator import run_full_evaluation
 from supabase import create_client, Client
 import bcrypt
+
 import requests
 import jwt
 from middleware import get_owner_id_from_jwt
